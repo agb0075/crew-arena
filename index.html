@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lista de tareas</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Lista de tareas</h1>
+
+    <form id="task-form" class="task-form" autocomplete="off">
+      <label for="task-input" class="sr-only">Nueva tarea</label>
+      <input type="text" id="task-input" placeholder="¿Qué tienes que hacer?" required>
+      <button type="submit">Añadir</button>
+    </form>
+
+    <ul id="task-list" class="task-list"></ul>
+    <p id="empty-msg" class="empty-msg">No hay tareas todavía.</p>
+
+    <div class="footer">
+      <span id="counter"></span>
+      <button id="clear-done" type="button">Borrar completadas</button>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
