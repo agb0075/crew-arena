@@ -32,6 +32,7 @@
   const ABILITIES = {
     dash: { name: 'Dash', color: '#7fd6ff', hint: 'K o Shift: impulso horizontal.' },
     djump: { name: 'Doble salto', color: '#b07cff', hint: 'Espacio otra vez en el aire.' },
+    gancho: { name: 'Gancho', color: '#ffb347', hint: 'Q: engancha hacia un anclaje cercano.' },
   };
   const BIOMES = ['Bosque Húmedo', 'Cripta Violeta', 'Ruinas de Arena', 'Fortaleza Carmesí'];
   const FLOOR_A = ['Catacumbas', 'Bóveda', 'Abismo', 'Torre', 'Santuario', 'Galería'];
@@ -50,6 +51,7 @@
     j: 'attack', J: 'attack', z: 'attack', Z: 'attack',
     k: 'dash', K: 'dash', Shift: 'dash',
     e: 'interact', E: 'interact',
+    q: 'hook', Q: 'hook',
   };
 
   // Casillas: 0 aire, 1 sólido, 2 plataforma de un sentido, 3 pinchos
@@ -205,7 +207,7 @@
 
     // Puertas: dos de habilidad, dos de llave
     const usedGate = new Set();
-    ['dash', 'djump', ...Array(KEY_DOORS).fill('key')].forEach((type) => {
+    ['dash', 'djump', 'gancho', ...Array(KEY_DOORS).fill('key')].forEach((type) => {
       const pool = edges.map((e, i) => i).filter((i) => !edges[i].need && !usedGate.has(i));
       const i = pick(pool);
       edges[i].need = type;
@@ -228,9 +230,13 @@
 
     // Objetos: cada uno se coloca en una sala alcanzable con lo que ya se ha recogido
     const placed = [];
-    for (const item of shuffle(['dash', 'djump', ...Array(KEY_DOORS).fill('key')])) {
+    // Orden de los poderes: cada uno aparece en una franja de profundidad, de más cerca a más lejos
+    const ITEM_PLAN = [['dash', [1, 3]], ['djump', [3, 6]], ['gancho', [5, 99]], ...Array(KEY_DOORS).fill(0).map(() => ['key', null])];
+    for (const [item, band] of ITEM_PLAN) {
       const st = simulate(edges, placed);
-      const cands = [...st.R].filter((r) => r !== bossIdx && !placed.some((p) => p.room === r));
+      const free = [...st.R].filter((r) => r !== bossIdx && !placed.some((p) => p.room === r));
+      const inBand = band ? free.filter((r) => depth[r] >= band[0] && depth[r] <= band[1]) : free;
+      const cands = inBand.length ? inBand : free;
       if (!cands.length) return null;
       placed.push({ room: pick(cands), item });
     }
@@ -425,7 +431,8 @@
   function populateItem(room, item) {
     const inner = groundSpots(room.tiles).filter((s) => s.x >= 3 && s.x <= RW - 4);
     if (!inner.length) return;
-    const s = pick(inner);
+    // Los poderes están en un altar central; las llaves, en cualquier sitio de la sala
+    const s = item === 'key' ? pick(inner) : inner.reduce((best, p) => (Math.abs(p.x - 15) < Math.abs(best.x - 15) ? p : best));
     room.pickup = { item, x: s.x * TS + 4, y: (s.y + 1) * TS - 34, w: 24, h: 24 };
     if (item === 'key') {
       // La llave tiene un centinela: un enemigo más resistente que los normales
@@ -440,6 +447,13 @@
 
   function populateRoom(room) {
     const spots = groundSpots(room.tiles);
+    // Anclajes para el gancho: puntos en el aire donde engancharse
+    room.anchors = [];
+    for (let i = 0; i < 2; i++) {
+      const ax = rnd(3, RW - 4);
+      const ay = rnd(2, 10);
+      if (room.tiles[ay][ax] === 0) room.anchors.push({ x: ax * TS + 16, y: ay * TS + 16 });
+    }
     const inner = spots.filter((s) => s.x >= 3 && s.x <= RW - 4);
 
     if (room.boss) {
@@ -607,7 +621,7 @@
       vx: 0, vy: 0, face: 1, onGround: false, prevBottom: 0,
       coyote: 0, jumpBuf: 0, jumpsLeft: 0,
       hp: 6, maxHp: 6, iframes: 0, dashT: 0, dashCD: 0, atkT: 0, hits: new Set(),
-      abil: { dash: false, djump: false }, keys: 0,
+      abil: { dash: false, djump: false, gancho: false }, keys: 0, hookT: 0, hookCD: 0, hookTarget: null,
       respawn: { room: 0, x: start.x * TS + 6, y: (start.y + 1) * TS - 28 },
       dead: false, respawnT: 0,
     };
@@ -623,6 +637,10 @@
   // Novedades al entrar en una sala: zona nueva, guardián y explorado
   function onEnterRoom(r) {
     r.explored = true;
+    if (r.pickup && r.pickup.item !== 'key' && !r.shrineShown) {
+      r.shrineShown = true;
+      bigAlert('SANTUARIO', `Un poder antiguo espera aquí: ${ABILITIES[r.pickup.item].name}.`, ABILITIES[r.pickup.item].color);
+    }
     if (!r.announced && r.enemies.some((e) => e.sentinel && !e.dead)) {
       r.announced = true;
       bigAlert('CENTINELA', 'Esta sala guarda una llave. Vence al centinela para tomarla.', '#d9a441');
@@ -778,9 +796,24 @@
     const p = player;
     if (p.iframes > 0) p.iframes--;
     if (p.dashCD > 0) p.dashCD--;
+    if (p.hookCD > 0) p.hookCD--;
 
     // Movimiento horizontal con aceleración y freno
-    if (p.dashT > 0) {
+    if (p.hookT > 0) {
+      // Gancho: el personaje vuela hacia el anclaje
+      p.hookT--;
+      const tx = p.hookTarget.x - (p.x + p.w / 2);
+      const ty = p.hookTarget.y - (p.y + p.h / 2);
+      const d = Math.hypot(tx, ty) || 1;
+      if (d < 14) {
+        p.hookT = 0;
+        p.vx = 0;
+        p.vy = 0;
+      } else {
+        p.vx = (tx / d) * 10;
+        p.vy = (ty / d) * 10;
+      }
+    } else if (p.dashT > 0) {
       p.dashT--;
       p.vx = p.face * DASH_V;
       p.vy = 0;
@@ -826,6 +859,22 @@
       p.dashCD = DASH_CD;
       p.iframes = Math.max(p.iframes, DASH_FRAMES);
       burst(p.x + p.w / 2, p.y + p.h / 2, '#7fd6ff', 12);
+    }
+
+    // Gancho: se engancha al anclaje más cercano dentro de 240 píxeles
+    if (pressed.hook && held('gancho') && p.hookCD <= 0 && p.hookT <= 0) {
+      const cands = (curRoom().anchors || [])
+        .map((a) => ({ a, d: Math.hypot(a.x - (p.x + p.w / 2), a.y - (p.y + p.h / 2)) }))
+        .filter((c) => c.d <= 240)
+        .sort((u, v) => u.d - v.d);
+      if (cands.length) {
+        p.hookTarget = cands[0].a;
+        p.hookT = 40;
+        p.hookCD = 20;
+        burst(cands[0].a.x, cands[0].a.y, '#ffb347', 10);
+      } else {
+        notify('No hay anclaje cerca.', '#ffb347');
+      }
     }
 
     // Ataque cuerpo a cuerpo
@@ -1246,6 +1295,33 @@
     ctx.fillRect(e.x + e.w / 2 + 3, e.y + 12, 5, 3);
   }
 
+  // Anclajes del gancho y cuerda mientras se vuela hacia uno
+  function drawAnchors(r) {
+    if (!r.anchors) return;
+    const ready = held('gancho');
+    r.anchors.forEach((a) => {
+      const pulse = 6 + Math.sin(frame * 0.15) * 2;
+      ctx.strokeStyle = ready ? '#ffb347' : '#5a4a3a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, pulse + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    if (player.hookT > 0 && player.hookTarget) {
+      ctx.strokeStyle = '#ffb347';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(player.x + player.w / 2, player.y + player.h / 2);
+      ctx.lineTo(player.hookTarget.x, player.hookTarget.y);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+
   function drawEnemies(r) {
     r.enemies.forEach((e) => {
       if (e.dead) return;
@@ -1348,11 +1424,11 @@
       ctx.fillStyle = player.abil[ab] ? ABILITIES[ab].color : '#2a2a38';
       ctx.fillRect(x, 40, 22, 6);
     });
-    drawKeyIcon(16 + 2 * 30 + 6, 43, player.keys > 0 ? '#ffd23f' : '#2a2a38');
+    drawKeyIcon(16 + 3 * 30 + 6, 43, player.keys > 0 ? '#ffd23f' : '#2a2a38');
     ctx.fillStyle = '#f2ece0';
     ctx.font = 'bold 13px Consolas, "Courier New", monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`x${player.keys}`, 16 + 2 * 30 + 16, 47);
+    ctx.fillText(`x${player.keys}`, 16 + 3 * 30 + 16, 47);
 
     // Avisos pequeños apilados abajo
     msgs.forEach((m, i) => {
@@ -1396,7 +1472,7 @@
   }
 
   function ABIL_ICON_ORDER() {
-    return ['dash', 'djump'];
+    return ['dash', 'djump', 'gancho'];
   }
 
   function wrapText(text, x, y, maxW, lh) {
@@ -1435,6 +1511,7 @@
     drawExit(r);
     drawSave(r);
     drawPickup(r);
+    drawAnchors(r);
     drawEnemies(r);
     drawPlayer();
     drawParticles();
@@ -1518,7 +1595,7 @@
       } else if (r.pickup && showIcons) {
         const pk = r.pickup;
         m.fillStyle = pk.item === 'key' ? '#ffd23f' : ABILITIES[pk.item].color;
-        m.fillText(pk.item === 'key' ? 'K' : pk.item === 'dash' ? 'D' : 'S', x + cell / 2, y + cell * 0.62);
+        m.fillText(pk.item === 'key' ? 'K' : pk.item === 'dash' ? 'D' : pk.item === 'gancho' ? 'G' : 'S', x + cell / 2, y + cell * 0.62);
       } else if (r.save && showIcons) {
         m.fillStyle = '#8fdcff';
         m.fillText('+', x + cell / 2, y + cell * 0.62);
@@ -1546,7 +1623,7 @@
   function drawBigMap() {
     ctx.fillStyle = 'rgba(5,3,8,0.9)';
     ctx.fillRect(0, 0, W, H);
-    const cell = 64;
+    const cell = 72;
     const gap = 10;
     const totalW = GX * (cell + gap) - gap;
     const totalH = GY * (cell + gap) - gap;
@@ -1566,10 +1643,10 @@
   function drawMinimap() {
     if (!minimap) return;
     const m = minimap;
-    m.clearRect(0, 0, 240, 160);
+    m.clearRect(0, 0, 290, 196);
     m.fillStyle = '#08060c';
-    m.fillRect(0, 0, 240, 160);
-    drawWorldMap(m, 20, 4, 4, 4, true);
+    m.fillRect(0, 0, 290, 196);
+    drawWorldMap(m, 26, 5, 5, 5, true);
   }
 
   // ---------- Pantalla de inicio ----------
@@ -1609,7 +1686,7 @@
     ctx.fillStyle = '#e8e2d4';
     ctx.font = '16px Segoe UI, system-ui, sans-serif';
     ctx.fillText('Flechas: mover  ·  Espacio: saltar  ·  J: atacar  ·  K o Shift: dash', W / 2, 300);
-    ctx.fillText('E: punto de guardado o grieta  ·  M: mapa grande  ·  R: nueva partida', W / 2, 330);
+    ctx.fillText('E: guardado o grieta  ·  Q: gancho  ·  M: mapa grande  ·  R: nueva partida', W / 2, 330);
     ctx.fillText('Objetivo: vence al guardián de la última sala y baja la escalera', W / 2, 360);
 
     if (Math.floor(Date.now() / 500) % 2 === 0) {

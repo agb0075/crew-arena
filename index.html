@@ -23,7 +23,7 @@
     .panel h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); }
     .panel p { margin: 4px 0; font-size: 14px; }
     kbd { font-family: Consolas, monospace; background: #241f32; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
-    canvas#mini { display: block; width: 240px; height: auto; image-rendering: pixelated; background: #08060c; border-radius: 4px; }
+    canvas#mini { display: block; width: 290px; height: auto; image-rendering: pixelated; background: #08060c; border-radius: 4px; }
     button { font-family: inherit; font-weight: 600; font-size: 14px; color: var(--text); background: #2a2438; border: 1px solid #4a4266; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
     button:hover { border-color: #ffc86a; }
     button:focus-visible { outline: 2px solid #ffc86a; outline-offset: 2px; }
@@ -47,6 +47,7 @@
     <div class="pad">
       <button type="button" data-act="jump" aria-label="Saltar">Saltar</button>
       <button type="button" data-act="dash" aria-label="Dash">Dash</button>
+      <button type="button" data-act="hook" aria-label="Gancho">Gancho</button>
       <button type="button" data-act="attack" class="attack" aria-label="Atacar">ATACAR</button>
     </div>
   </div>
@@ -56,11 +57,12 @@
       <p><kbd>←</kbd> <kbd>→</kbd> mover · <kbd>Espacio</kbd> saltar</p>
       <p><kbd>J</kbd> atacar · <kbd>K</kbd> o <kbd>Shift</kbd> dash</p>
       <p><kbd>E</kbd> usar punto de guardado</p>
+      <p><kbd>Q</kbd> gancho hacia un anclaje cercano</p>
       <p>Llega a la escalera del guardián para acabar el juego</p>
     </section>
     <section class="panel">
       <h2>Mapa</h2>
-      <canvas id="mini" width="240" height="160" aria-label="Mapa del reino"></canvas>
+      <canvas id="mini" width="290" height="196" aria-label="Mapa del reino"></canvas>
       <p><kbd>M</kbd> mapa grande</p>
     </section>
     <section class="panel">
