@@ -32,8 +32,6 @@
   const GAP_Y = [13, 14, 15, 16];   // salidas laterales a la altura del suelo
   const GAP_X = [13, 14, 15, 16];   // trampilla del suelo (y hueco del techo, si lo hubiera)
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  // Objeto que abre la trampilla de la fila b. Las habilidades se tienen desde el inicio.
-  const GATES = [null, 'key', null, 'key', null];
   const ABILITIES = {
     dash: { name: 'Dash', color: '#7fd6ff', hint: 'K o Shift: impulso horizontal.' },
     djump: { name: 'Doble salto', color: '#b07cff', hint: 'Espacio otra vez en el aire.' },
@@ -131,13 +129,15 @@
     throw new Error('No se pudo generar un mundo jugable');
   }
 
-  // Filas en serpiente: la fila b entra por un extremo y sale por el otro. La salida baja a la fila siguiente
-  // por una trampilla de un sentido, en la misma columna donde entra la fila siguiente.
+  // Mundo en cuadrícula. Un árbol de expansión conecta todas las salas sin llaves, así que el juego nunca
+  // se queda sin salida. Las puertas del techo y del suelo se cruzan en los dos sentidos. Los atajos extra
+  // llevan llave o pasadizo secreto, y nunca son necesarios.
   function tryWorld() {
     const N = GX * GY;
+    const KEY_DOORS = 4;
     const id = (x, y) => y * GX + x;
-    const entryX = (row) => (row % 2 === 0 ? 0 : GX - 1);
-    const exitX = (row) => (row % 2 === 0 ? GX - 1 : 0);
+    const cx = (i) => i % GX;
+    const cy = (i) => Math.floor(i / GX);
 
     const edges = [];
     const addEdge = (a, b, need = null) => {
@@ -146,36 +146,70 @@
       return e;
     };
 
-    // Cada fila es un tramo horizontal de salas con puertas laterales a la altura del suelo
-    for (let row = 0; row < GY; row++) {
-      for (let x = 0; x < GX - 1; x++) addEdge(id(x, row), id(x + 1, row));
+    // Árbol de expansión: conecta todas las salas sin depender de llaves
+    const inTree = new Set([0]);
+    while (inTree.size < N) {
+      const cand = [];
+      for (const a of inTree) {
+        for (const [dx, dy] of DIRS) {
+          const x = cx(a) + dx;
+          const y = cy(a) + dy;
+          if (x < 0 || y < 0 || x >= GX || y >= GY) continue;
+          const b = id(x, y);
+          if (!inTree.has(b)) cand.push([a, b]);
+        }
+      }
+      const [a, b] = pick(cand);
+      inTree.add(b);
+      addEdge(a, b);
     }
 
-    // Trampillas: sólo se cruzan hacia abajo, desde la sala de salida de una fila
-    for (let b = 0; b < BLOCKS - 1; b++) {
-      const upper = id(exitX(b), b);
-      const lower = id(entryX(b + 1), b + 1);
-      const e = addEdge(upper, lower, GATES[b]);
-      e.src = upper;
+    // Atajos: aristas que no pertenecen al árbol. Unas llevan llave y otras pasadizo secreto.
+    const pairKey = (a, b) => Math.min(a, b) * N + Math.max(a, b);
+    const have = new Set(edges.map((e) => pairKey(e.a, e.b)));
+    const extra = [];
+    for (let a = 0; a < N; a++) {
+      for (const [dx, dy] of DIRS) {
+        const x = cx(a) + dx;
+        const y = cy(a) + dy;
+        if (x < 0 || y < 0 || x >= GX || y >= GY) continue;
+        const b = id(x, y);
+        if (b > a && !have.has(pairKey(a, b))) extra.push([a, b]);
+      }
     }
+    const loops = shuffle(extra).slice(0, Math.floor(N / 3)).map(([a, b]) => addEdge(a, b));
+    loops.slice(0, KEY_DOORS).forEach((e) => { e.need = 'key'; });
+    loops.slice(KEY_DOORS, KEY_DOORS + 2).forEach((e) => { e.need = 'secret'; });
 
-    // Objetos: cada llave en la sala de entrada de su fila, así se recoge antes de la trampilla
-    const placed = [];
-    for (let b = 0; b < BLOCKS - 1; b++) {
-      if (GATES[b]) placed.push({ room: id(entryX(b), b), item: GATES[b] });
+    // Guardián: la sala más lejos de la entrada, medida sólo con aristas sin requisito
+    const depth = new Array(N).fill(-1);
+    depth[0] = 0;
+    const queue = [0];
+    for (let qi = 0; qi < queue.length; qi++) {
+      const cur = queue[qi];
+      edges.forEach((e) => {
+        if (e.need) return;
+        const other = e.a === cur ? e.b : e.b === cur ? e.a : -1;
+        if (other >= 0 && depth[other] < 0) {
+          depth[other] = depth[cur] + 1;
+          queue.push(other);
+        }
+      });
     }
+    const far = Math.max(...depth);
+    const bossIdx = pick(depth.map((d, i) => (d === far ? i : -1)).filter((i) => i >= 0));
 
-    // Guardián: al final de la última fila
-    const bossIdx = id(exitX(BLOCKS - 1), BLOCKS - 1);
+    // Llaves: en salas al azar, nunca en la del guardián ni en la entrada
+    const keyRooms = shuffle([...Array(N).keys()].filter((i) => i !== bossIdx && i !== 0)).slice(0, KEY_DOORS);
+    const placed = keyRooms.map((room) => ({ room, item: 'key' }));
 
     const check = simulate(edges, placed);
     if (!check.R.has(bossIdx)) return null;
 
     const rooms = [];
     for (let i = 0; i < N; i++) {
-      const row = Math.floor(i / GX);
       rooms.push({
-        i, gx: i % GX, gy: row, block: row, depth: row,
+        i, gx: cx(i), gy: cy(i), block: cy(i), depth: cy(i),
         conn: { l: null, r: null, u: null, d: null }, open: null,
         tiles: null, enemies: [], pickup: null, save: null, exit: null, anchors: [],
         boss: i === bossIdx, cleared: false, explored: false, bg: null,
@@ -192,7 +226,7 @@
       else { A.conn.u = e; B.conn.d = e; }
     });
 
-    // Salidas abiertas desde cada sala: una trampilla sólo es salida desde la sala de arriba
+    // Salidas abiertas desde cada sala: en las aristas sin sentido, en los dos
     rooms.forEach((r) => {
       const open = {};
       ['l', 'r', 'u', 'd'].forEach((dir) => {
@@ -305,6 +339,12 @@
     const row = (y, x0, len, v) => {
       for (let x = x0 - 1; x < x0 + len + 1; x++) put(x, y, v);
     };
+    // Escalera de plataformas desde el suelo hasta la puerta del techo. Se coloca antes del diseño,
+    // para que nada la corte. Los escalones están a dos casillas de altura: cada salto es fácil.
+    if (o.u) {
+      [[14, 9, 3], [12, 12, 4], [10, 9, 3], [8, 12, 4], [6, 9, 3], [4, 12, 4], [2, 12, 6]]
+        .forEach(([y, x0, len]) => row(y, x0, len, 2));
+    }
     const pattern = forcedPattern;
     if (pattern === 'stairs') {
       const mirror = Math.random() < 0.5;
@@ -1299,9 +1339,10 @@
     const spans = {
       l: { x: 0, y: GAP_Y[0] * TS, w: TS, h: GAP_Y.length * TS },
       r: { x: W - TS, y: GAP_Y[0] * TS, w: TS, h: GAP_Y.length * TS },
+      u: { x: GAP_X[0] * TS, y: 0, w: GAP_X.length * TS, h: TS },
       d: { x: GAP_X[0] * TS, y: H - TS, w: GAP_X.length * TS, h: TS },
     };
-    ['l', 'r', 'd'].forEach((dir) => {
+    ['l', 'r', 'u', 'd'].forEach((dir) => {
       const e = r.conn[dir];
       if (!e) return;
       const s = spans[dir];
