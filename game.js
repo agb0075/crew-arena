@@ -1,34 +1,41 @@
-// Metroidvania 2.5D: mundo de 35 salas, puertas con habilidad, llave o de un sentido, guardián y final.
+// Metroidvania 2.5D: mundo lineal en seis bloques, puertas que se abren con el objeto del bloque anterior,
+// pasadizos secretos y un guardián al final. Está pensado para no tener nunca un callejón sin salida.
 (() => {
   'use strict';
 
   // ---------- Constantes ----------
-  const TS = 32;                  // tamaño de una casilla en píxeles
-  const RW = 30;                  // casillas por sala (ancho)
-  const RH = 18;                  // casillas por sala (alto)
-  const W = RW * TS;              // 960: una sala ocupa toda la pantalla
-  const H = RH * TS;              // 576
-  const GX = 9;                   // salas del mundo en horizontal
-  const GY = 6;
-  const KEY_DOORS = 4;            // puertas con llave por mundo (cada una tiene su centinela)                   // salas del mundo en vertical
+  const TS = 32;                    // tamaño de una casilla en píxeles
+  const RW = 30;                    // casillas por sala (ancho)
+  const RH = 18;                    // casillas por sala (alto)
+  const W = RW * TS;                // 960: una sala ocupa toda la pantalla
+  const H = RH * TS;                // 576
+  const GX = 9;                     // salas del mundo en horizontal
+  const GY = 6;                     // salas del mundo en vertical
+  const BLOCKS = 6;                 // bloques de 3x3 salas, en orden lineal
   const GRAV = 0.55;
   const MAX_FALL = 12;
   const RUN_ACC = 0.6;
   const RUN_MAX = 4.6;
   const JUMP_V = -10.5;
   const DJUMP_V = -9.5;
-  const JUMP_CUT = -3;            // altura mínima del salto si sueltas el botón pronto
+  const JUMP_CUT = -3;              // altura mínima del salto si sueltas el botón pronto
   const DASH_V = 11;
   const DASH_FRAMES = 12;
   const DASH_CD = 45;
-  const COYOTE = 6;               // frames para saltar justo después de caer de una plataforma
-  const BUFFER = 6;               // frames que se recuerda la pulsación de salto
+  const COYOTE = 6;                 // frames para saltar justo después de caer de una plataforma
+  const BUFFER = 6;                 // frames que se recuerda la pulsación de salto
   const ATK_FRAMES = 16;
   const IFRAMES = 70;
   const RESPAWN_FRAMES = 100;
-  const GAP_Y = [7, 8, 9, 10];    // filas de las salidas laterales
-  const GAP_X = [13, 14, 15, 16]; // columnas de las salidas superior e inferior
+  const HOOK_FRAMES = 40;
+  const HOOK_RANGE = 240;
+  const GAP_Y = [7, 8, 9, 10];      // filas de las salidas laterales
+  const GAP_X = [13, 14, 15, 16];   // columnas de las salidas superior e inferior
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // Bloques de 3x3 salas en serpiente: el orden es el orden de juego
+  const BLOCK_ORDER = [[0, 0], [1, 0], [2, 0], [2, 1], [1, 1], [0, 1]];
+  // Objeto que abre la puerta entre el bloque b y el b+1. Cada uno está en el bloque b.
+  const GATES = ['dash', 'key', 'djump', 'key', 'gancho'];
   const ABILITIES = {
     dash: { name: 'Dash', color: '#7fd6ff', hint: 'K o Shift: impulso horizontal.' },
     djump: { name: 'Doble salto', color: '#b07cff', hint: 'Espacio otra vez en el aire.' },
@@ -61,11 +68,11 @@
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
   const shuffle = (arr) => arr.map((v) => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
   const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-  const biomeOf = (gy) => Math.min(BIOMES.length - 1, Math.floor((gy * BIOMES.length) / GY));
+  const blockOfRoom = (r) => r.block;
+  const biomeOfRoom = (r) => Math.min(BIOMES.length - 1, Math.floor((r.block * BIOMES.length) / BLOCKS));
 
-  // ---------- Simulación de solvencia ----------
-  // Las aristas tienen: need (null | 'dash' | 'djump' | 'key'), src (sala desde la que se puede cruzar, si es de un sentido).
-  // reachDirected devuelve las salas alcanzables con las habilidades y puertas abiertas dadas.
+  // ---------- Comprobación de solvencia ----------
+  // Aristas: need (null | 'dash' | 'djump' | 'gancho' | 'key' | 'secret'), src (sala desde la que se cruza, si es de un sentido).
   function reachDirected(edges, held, opened) {
     const seen = new Set([0]);
     const st = [0];
@@ -120,135 +127,118 @@
 
   // ---------- Mundo ----------
   function genWorld() {
-    for (let tries = 0; tries < 20000; tries++) {
+    for (let tries = 0; tries < 2000; tries++) {
       const w = tryWorld();
       if (w) return w;
     }
     throw new Error('No se pudo generar un mundo jugable');
   }
 
+  // Mundo lineal: cada bloque tiene todas sus salas conectadas sin puertas. Entre bloques hay una sola
+  // puerta, que se abre con el objeto del bloque anterior. Así el orden de juego siempre es posible.
   function tryWorld() {
     const N = GX * GY;
-    const cx = (i) => i % GX;
-    const cy = (i) => Math.floor(i / GX);
-    const id = (x, y) => y * GX + x;
+    const idOf = (x, y) => y * GX + x;
+    const adjacent = (a, b) => Math.abs((a % GX) - (b % GX)) + Math.abs(Math.floor(a / GX) - Math.floor(b / GX)) === 1;
 
-    // Árbol de expansión aleatorio
-    const inTree = new Set([0]);
-    const edges = [];
-    let last = 0; // la última sala añadida: se tiende a seguir el mismo camino (más lineal)
-    while (inTree.size < N) {
-      const cand = [];
-      for (const a of inTree) {
-        for (const [dx, dy] of DIRS) {
-          const x = cx(a) + dx;
-          const y = cy(a) + dy;
-          if (x < 0 || y < 0 || x >= GX || y >= GY) continue;
-          const b = id(x, y);
-          if (!inTree.has(b)) cand.push([a, b]);
+    const blockIdx = new Array(N).fill(-1);
+    const blockCells = BLOCK_ORDER.map(([bx, by], b) => {
+      const cells = [];
+      for (let dy = 0; dy < 3; dy++) {
+        for (let dx = 0; dx < 3; dx++) {
+          const id = idOf(bx * 3 + dx, by * 3 + dy);
+          blockIdx[id] = b;
+          cells.push(id);
         }
       }
-      const fromLast = cand.filter(([x]) => x === last);
-      const [a, b] = fromLast.length && Math.random() < 0.7 ? pick(fromLast) : pick(cand);
-      last = b;
-      inTree.add(b);
-      edges.push({ a, b, need: null, src: undefined, opened: false });
-    }
+      return cells;
+    });
 
-    // Bucles extra: crean rutas alternativas para que haya vuelta
-    const pairKey = (a, b) => Math.min(a, b) * N + Math.max(a, b);
-    const have = new Set(edges.map((e) => pairKey(e.a, e.b)));
-    const extra = [];
-    for (let a = 0; a < N; a++) {
-      for (const [dx, dy] of DIRS) {
-        const x = cx(a) + dx;
-        const y = cy(a) + dy;
-        if (x < 0 || y < 0 || x >= GX || y >= GY) continue;
-        const b = id(x, y);
-        if (b > a && !have.has(pairKey(a, b))) extra.push([a, b]);
+    const edges = [];
+    const addEdge = (a, b, need = null) => {
+      const e = { a, b, need, src: undefined, opened: false, revealed: false };
+      edges.push(e);
+      return e;
+    };
+
+    // Dentro de cada bloque: árbol de expansión (conexo) y bucles extra
+    const loopsOf = blockCells.map((cells) => {
+      const inTree = new Set([cells[0]]);
+      let last = cells[0];
+      while (inTree.size < cells.length) {
+        const cand = [];
+        for (const a of inTree) {
+          for (const b of cells) {
+            if (!inTree.has(b) && adjacent(a, b)) cand.push([a, b]);
+          }
+        }
+        const fromLast = cand.filter(([x]) => x === last);
+        const [a, b] = fromLast.length && Math.random() < 0.6 ? pick(fromLast) : pick(cand);
+        inTree.add(b);
+        last = b;
+        addEdge(a, b);
       }
-    }
-    shuffle(extra).slice(0, Math.floor(N / 4)).forEach(([a, b]) => edges.push({ a, b, need: null, src: undefined, opened: false }));
+      const pairs = [];
+      cells.forEach((a) => cells.forEach((b) => {
+        if (a < b && adjacent(a, b) && !edges.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))) {
+          pairs.push([a, b]);
+        }
+      }));
+      return shuffle(pairs).slice(0, 3).map(([a, b]) => addEdge(a, b));
+    });
 
-    // Profundidad sin puertas: la sala más lejana es el guardián
-    const depth = new Array(N).fill(-1);
-    depth[0] = 0;
-    const q = [0];
-    while (q.length) {
-      const cur = q.shift();
+    // Pasadizo secreto y puerta de un sentido: sólo en bucles, así siempre hay otro camino
+    loopsOf.forEach((loops) => {
+      if (loops.length >= 2) {
+        loops[0].need = 'secret';
+        loops[1].src = Math.random() < 0.5 ? loops[1].a : loops[1].b;
+      }
+    });
+
+    // Puertas entre bloques: una sola arista por cada frontera, con el requisito del bloque anterior
+    const crossings = [];
+    for (let b = 0; b < BLOCKS - 1; b++) {
+      const pairs = [];
+      blockCells[b].forEach((a) => blockCells[b + 1].forEach((c) => {
+        if (adjacent(a, c)) pairs.push([a, c]);
+      }));
+      const [a, c] = pick(pairs);
+      crossings.push(addEdge(a, c, GATES[b]));
+    }
+
+    // Objetos: cada uno en un sitio cualquiera de su bloque (todo el bloque es alcanzable desde su entrada)
+    const placed = [];
+    for (let b = 0; b < BLOCKS - 1; b++) {
+      placed.push({ room: pick(blockCells[b]), item: GATES[b] });
+    }
+
+    // Guardián: la sala más lejos de la entrada del último bloque
+    const entry = crossings[BLOCKS - 2].b;
+    const dist = new Map([[entry, 0]]);
+    const queue = [entry];
+    for (let qi = 0; qi < queue.length; qi++) {
+      const cur = queue[qi];
       edges.forEach((e) => {
+        if (e.need || e.src !== undefined) return;
         const other = e.a === cur ? e.b : e.b === cur ? e.a : -1;
-        if (other >= 0 && depth[other] < 0) {
-          depth[other] = depth[cur] + 1;
-          q.push(other);
+        if (other >= 0 && blockIdx[other] === BLOCKS - 1 && !dist.has(other)) {
+          dist.set(other, dist.get(cur) + 1);
+          queue.push(other);
         }
       });
     }
-    const far = Math.max(...depth);
-    const bossIdx = pick(depth.map((d, i) => (d === far ? i : -1)).filter((i) => i >= 0));
+    const bossIdx = [...dist.entries()].reduce((best, cur) => (cur[1] > best[1] ? cur : best))[0];
 
-    // Una arista es parte de un ciclo si el grafo sigue conectado sin ella
-    const connectedWithout = (skip) => {
-      const seen = new Set([0]);
-      const st = [0];
-      while (st.length) {
-        const cur = st.pop();
-        edges.forEach((e, ei) => {
-          if (ei === skip) return;
-          const other = e.a === cur ? e.b : e.b === cur ? e.a : -1;
-          if (other >= 0 && !seen.has(other)) {
-            seen.add(other);
-            st.push(other);
-          }
-        });
-      }
-      return seen.size === N;
-    };
-
-    // Puertas: dos de habilidad, dos de llave
-    const usedGate = new Set();
-    ['dash', 'djump', 'gancho', ...Array(KEY_DOORS).fill('key')].forEach((type) => {
-      const pool = edges.map((e, i) => i).filter((i) => !edges[i].need && !usedGate.has(i));
-      const i = pick(pool);
-      edges[i].need = type;
-      usedGate.add(i);
-    });
-
-    // Puertas de un sentido: sólo en aristas de ciclo, para que siempre exista la vuelta
-    const oneWayPool = shuffle(edges.map((e, i) => i).filter((i) => !usedGate.has(i) && connectedWithout(i)));
-    oneWayPool.slice(0, 2).forEach((i) => {
-      edges[i].src = Math.random() < 0.5 ? edges[i].a : edges[i].b;
-      usedGate.add(i);
-    });
-
-    // Pasadizos secretos: atajos ocultos tras un muro agrietado (sólo en aristas de ciclo)
-    const secretPool = shuffle(edges.map((e, i) => i).filter((i) => !usedGate.has(i) && connectedWithout(i)));
-    secretPool.slice(0, 3).forEach((i) => {
-      edges[i].need = 'secret';
-      usedGate.add(i);
-    });
-
-    // Objetos: cada uno se coloca en una sala alcanzable con lo que ya se ha recogido
-    const placed = [];
-    // Orden de los poderes: cada uno aparece en una franja de profundidad, de más cerca a más lejos
-    const ITEM_PLAN = [['dash', [1, 3]], ['djump', [3, 6]], ['gancho', [5, 99]], ...Array(KEY_DOORS).fill(0).map(() => ['key', null])];
-    for (const [item, band] of ITEM_PLAN) {
-      const st = simulate(edges, placed);
-      const free = [...st.R].filter((r) => r !== bossIdx && !placed.some((p) => p.room === r));
-      const inBand = band ? free.filter((r) => depth[r] >= band[0] && depth[r] <= band[1]) : free;
-      const cands = inBand.length ? inBand : free;
-      if (!cands.length) return null;
-      placed.push({ room: pick(cands), item });
-    }
-    const fin = simulate(edges, placed);
-    if (!fin.R.has(bossIdx)) return null;
+    // Comprobación final: con los objetos del camino se llega al guardián
+    const check = simulate(edges, placed);
+    if (!check.R.has(bossIdx)) return null;
 
     const rooms = [];
     for (let i = 0; i < N; i++) {
       rooms.push({
-        i, gx: cx(i), gy: cy(i), depth: depth[i],
+        i, gx: i % GX, gy: Math.floor(i / GX), block: blockIdx[i], depth: blockIdx[i],
         conn: { l: null, r: null, u: null, d: null },
-        tiles: null, enemies: [], pickup: null, save: null, exit: null,
+        tiles: null, enemies: [], pickup: null, save: null, exit: null, anchors: [],
         boss: i === bossIdx, cleared: false, explored: false, bg: null,
       });
     }
@@ -267,13 +257,10 @@
       r.tiles = genRoomTiles(r);
       r.bg = genRoomBg();
     });
-    placed.forEach((p) => {
-      const r = rooms[p.room];
-      populateItem(r, p.item);
-    });
+    placed.forEach((p) => populateItem(rooms[p.room], p.item));
     rooms.forEach((r) => populateRoom(r));
 
-    return { rooms, edges, cur: 0, bossIdx, bossDown: false, lastBiome: -1, bossIntro: false, bossHalf: false, rebuilt: true, check: fin };
+    return { rooms, edges, cur: 0, bossIdx, bossDown: false, lastBlock: -1, bossIntro: false, placed };
   }
 
   // Fondo de una sala: torres lejanas y columnas medias para el paralaje
@@ -361,7 +348,7 @@
     if (c.u) GAP_X.forEach((x) => (t[0][x] = 0));
     if (c.d) GAP_X.forEach((x) => (t[RH - 1][x] = 0));
 
-    // Diseño de la sala. Las salidas quedan libres y cada patrón se mantiene al alcance de un salto.
+    // Diseño de la sala. Las salidas quedan libres.
     const inGap = (x, y) =>
       (x <= 1 && GAP_Y.includes(y)) || (x >= RW - 2 && GAP_Y.includes(y)) ||
       (y <= 1 && GAP_X.includes(x)) || (y >= RH - 2 && GAP_X.includes(x));
@@ -373,42 +360,36 @@
     };
     const pattern = forcedPattern;
     if (pattern === 'platforms') {
-      // Plataformas de un sentido a distintas alturas
       [14, 11, 8, 5].forEach((ly) => {
         if (Math.random() < 0.6) row(ly, rnd(4, RW - 9), rnd(3, 6), 2);
       });
     } else if (pattern === 'stairs') {
-      // Escalera ascendente que cruza la sala
       const mirror = Math.random() < 0.5;
       for (let s = 0; s < 5; s++) {
         const x0 = mirror ? RW - 6 - s * 3 - 4 : 5 + s * 3;
         row(15 - s * 2, x0, 4, 2);
       }
     } else if (pattern === 'pillars') {
-      // Pilares sólidos que obligan a rodear o saltar
       [6, 9, 21, 24].forEach((x) => {
         if (Math.random() < 0.6) for (let y = 8; y < RH - 1; y++) put(x, y, 1);
       });
     } else if (pattern === 'pit') {
-      // Foso de pinchos con una repisa sobre él
       row(RH - 2, 12, 4, 3);
       row(13, 9, 4, 2);
       row(13, 17, 4, 2);
     } else if (pattern === 'shaft') {
-      // Pasillo vertical con dos repisas a cada lado
       row(13, 4, 5, 2);
       row(13, RW - 9, 5, 2);
       row(9, 9, 4, 2);
       row(9, RW - 13, 4, 2);
     } else if (pattern === 'ledges') {
-      // Repisas en ascenso hacia un lado
       row(13, 3, 4, 2);
       row(10, 8, 4, 2);
       row(7, 13, 5, 2);
     }
 
     // Pinchos en el suelo, salvo en la entrada y en la sala del guardián
-    if (room.i !== 0 && !room.boss && Math.random() < 0.35) {
+    if (room.i !== 0 && !room.boss && Math.random() < 0.3) {
       const x0 = rnd(3, RW - 6);
       for (let x = x0; x < x0 + 2; x++) {
         if (t[RH - 2][x] === 0) t[RH - 2][x] = 3;
@@ -428,10 +409,10 @@
     return spots;
   }
 
+  // Objeto de un bloque. Los poderes van en un altar central; las llaves, en cualquier sitio.
   function populateItem(room, item) {
     const inner = groundSpots(room.tiles).filter((s) => s.x >= 3 && s.x <= RW - 4);
     if (!inner.length) return;
-    // Los poderes están en un altar central; las llaves, en cualquier sitio de la sala
     const s = item === 'key' ? pick(inner) : inner.reduce((best, p) => (Math.abs(p.x - 15) < Math.abs(best.x - 15) ? p : best));
     room.pickup = { item, x: s.x * TS + 4, y: (s.y + 1) * TS - 34, w: 24, h: 24 };
     if (item === 'key') {
@@ -448,7 +429,6 @@
   function populateRoom(room) {
     const spots = groundSpots(room.tiles);
     // Anclajes para el gancho: puntos en el aire donde engancharse
-    room.anchors = [];
     for (let i = 0; i < 2; i++) {
       const ax = rnd(3, RW - 4);
       const ay = rnd(2, 10);
@@ -470,7 +450,8 @@
       const sv = spots.find((p) => p.x >= 3 && p.x <= 6) || spots[0];
       room.save = { x: sv.x * TS + 2, y: (sv.y + 1) * TS - 28, w: 28, h: 28 };
     } else if (room.i !== 0) {
-      const count = rnd(1, 3) + (room.depth >= 3 ? 1 : 0);
+      // Más enemigos y más resistentes según avanzas de bloque
+      const count = rnd(1, 2) + (room.block >= 2 ? 1 : 0);
       for (let n = 0; n < count; n++) {
         if (Math.random() < 0.3) {
           const y = rnd(2, 11);
@@ -484,7 +465,7 @@
           const s = pick(inner);
           room.enemies.push({
             type: 'crawler', x: s.x * TS + 3, y: (s.y + 1) * TS - 22, w: 26, h: 22, vx: 0, vy: 0,
-            hp: 2, dmg: 1, face: Math.random() < 0.5 ? 1 : -1, hurt: 0, dead: false,
+            hp: room.block >= 3 ? 3 : 2, dmg: 1, face: Math.random() < 0.5 ? 1 : -1, hurt: 0, dead: false,
             hitWall: false, onGround: false, bounded: true,
           });
         }
@@ -503,7 +484,7 @@
   let pressed = {};
   let frame = 0;
   let msgs = [];          // cola de avisos pequeños
-  let big = null;         // aviso grande centrado: { title, text, t }
+  let big = null;         // aviso grande centrado: { title, text, color, t }
   let particles = [];
   let mapOpen = false;
   let ended = null;       // { floor, name } cuando se acaba el juego
@@ -621,7 +602,8 @@
       vx: 0, vy: 0, face: 1, onGround: false, prevBottom: 0,
       coyote: 0, jumpBuf: 0, jumpsLeft: 0,
       hp: 6, maxHp: 6, iframes: 0, dashT: 0, dashCD: 0, atkT: 0, hits: new Set(),
-      abil: { dash: false, djump: false, gancho: false }, keys: 0, hookT: 0, hookCD: 0, hookTarget: null,
+      abil: { dash: false, djump: false, gancho: false }, keys: 0,
+      hookT: 0, hookCD: 0, hookTarget: null,
       respawn: { room: 0, x: start.x * TS + 6, y: (start.y + 1) * TS - 28 },
       dead: false, respawnT: 0,
     };
@@ -631,10 +613,10 @@
     mapOpen = false;
     ended = null;
     onEnterRoom(curRoom());
-    bigAlert('AVENTURA', 'Explora el reino. Hay puertas que piden llaves, habilidades o un lado concreto.');
+    bigAlert('AVENTURA', 'Seis zonas en orden. Cada una te da el objeto que abre la siguiente.');
   }
 
-  // Novedades al entrar en una sala: zona nueva, guardián y explorado
+  // Novedades al entrar en una sala: zona nueva, santuario, centinela y guardián
   function onEnterRoom(r) {
     r.explored = true;
     if (r.pickup && r.pickup.item !== 'key' && !r.shrineShown) {
@@ -643,16 +625,15 @@
     }
     if (!r.announced && r.enemies.some((e) => e.sentinel && !e.dead)) {
       r.announced = true;
-      bigAlert('CENTINELA', 'Esta sala guarda una llave. Vence al centinela para tomarla.', '#d9a441');
+      notify('Un centinela guarda la llave de esta sala.', '#d9a441');
     }
-    const b = biomeOf(r.gy);
-    if (b !== world.lastBiome) {
-      world.lastBiome = b;
-      bigAlert(BIOMES[b], 'Nueva zona del reino');
+    if (r.block !== world.lastBlock) {
+      world.lastBlock = r.block;
+      bigAlert(BIOMES[biomeOfRoom(r)], `Zona ${r.block + 1} de ${BLOCKS}`);
     }
     if (r.boss && !world.bossIntro) {
       world.bossIntro = true;
-      bigAlert('¡GUARDIÁN!', 'La salida se abrirá al vencerlo', '#ff4d6d');
+      bigAlert('¡GUARDIÁN!', 'La escalera de salida se abrirá al vencerlo', '#ff4d6d');
     }
   }
 
@@ -770,6 +751,14 @@
       if (!e || !touch[dir] || passageOpen(r, dir)) return;
       if (e.src !== undefined && e.src !== r.i) {
         notify('Esta puerta solo se abre desde el otro lado.', '#ff9a6a');
+      } else if (e.need === 'secret') {
+        if (pressed.interact) {
+          e.revealed = true;
+          notify('¡Pasadizo secreto revelado!', '#ffc86a');
+          burst(W / 2, H / 2, '#ffc86a', 24);
+        } else {
+          notify('Grieta en el muro: pulsa E para derribarla.', '#ffc86a');
+        }
       } else if (e.need === 'key') {
         if (p.keys > 0) {
           p.keys--;
@@ -777,14 +766,6 @@
           notify('Llave usada: la puerta se abre.', '#ffd23f');
         } else {
           notify('Puerta cerrada. Necesitas una llave.', '#ffd23f');
-        }
-      } else if (e.need === 'secret') {
-        if (pressed.interact) {
-          e.revealed = true;
-          notify('¡Pasadizo secreto revelado!', '#ffc86a');
-          burst(r.conn[dir] ? (dir === 'l' ? 8 : dir === 'r' ? W - 8 : W / 2) : 0, dir === 'u' ? 8 : dir === 'd' ? H - 8 : H / 2, '#ffc86a', 24);
-        } else {
-          notify('Grieta en el muro: pulsa E para derribarla.', '#ffc86a');
         }
       } else if (e.need) {
         notify(`Puerta sellada. Necesitas ${ABILITIES[e.need].name}.`, ABILITIES[e.need].color);
@@ -851,7 +832,7 @@
         burst(p.x + p.w / 2, p.y + p.h, '#b07cff', 10);
       }
     }
-    if (!keys.jump && p.vy < JUMP_CUT && p.dashT <= 0) p.vy = JUMP_CUT;
+    if (!keys.jump && p.vy < JUMP_CUT && p.dashT <= 0 && p.hookT <= 0) p.vy = JUMP_CUT;
 
     // Dash: sin gravedad y con invulnerabilidad breve
     if (pressed.dash && held('dash') && p.dashCD <= 0 && p.dashT <= 0) {
@@ -861,15 +842,15 @@
       burst(p.x + p.w / 2, p.y + p.h / 2, '#7fd6ff', 12);
     }
 
-    // Gancho: se engancha al anclaje más cercano dentro de 240 píxeles
+    // Gancho: se engancha al anclaje más cercano dentro del alcance
     if (pressed.hook && held('gancho') && p.hookCD <= 0 && p.hookT <= 0) {
       const cands = (curRoom().anchors || [])
         .map((a) => ({ a, d: Math.hypot(a.x - (p.x + p.w / 2), a.y - (p.y + p.h / 2)) }))
-        .filter((c) => c.d <= 240)
+        .filter((c) => c.d <= HOOK_RANGE)
         .sort((u, v) => u.d - v.d);
       if (cands.length) {
         p.hookTarget = cands[0].a;
-        p.hookT = 40;
+        p.hookT = HOOK_FRAMES;
         p.hookCD = 20;
         burst(cands[0].a.x, cands[0].a.y, '#ffb347', 10);
       } else {
@@ -924,6 +905,13 @@
 
     checkDoors(curRoom());
 
+    // Red de seguridad: si algo deja al jugador fuera del mapa, vuelve al último guardado
+    if (p.y > H + 150 || p.x < -150 || p.x > W + 150) {
+      p.dead = true;
+      p.respawnT = 1;
+      notify('Te has salido del mapa. Vuelves al último guardado.', '#ff6b6b');
+    }
+
     // Objetos, guardado y salida
     const r = curRoom();
     if (r.pickup && overlaps(p, r.pickup)) collectItem(r);
@@ -940,7 +928,7 @@
     const it = r.pickup;
     if (it.item === 'key') {
       player.keys++;
-      notify('Llave encontrada. Sirve para una puerta cerrada.', '#ffd23f');
+      notify('Llave encontrada. Sirve para la puerta del siguiente bloque.', '#ffd23f');
     } else {
       player.abil[it.item] = true;
       bigAlert(`Nueva habilidad: ${ABILITIES[it.item].name}`, ABILITIES[it.item].hint, ABILITIES[it.item].color);
@@ -954,7 +942,7 @@
     if (ended) return;
     const floor = rnd(2, 9);
     ended = { floor, name: `${pick(FLOOR_A)} ${pick(FLOOR_B)}` };
-    bigAlert('FIN DE LA AVENTURA', `Desciendes al piso ${ended.floor}: ${ended.name}. Pulsa Nueva partida para volver a jugar.`, '#7fd67f');
+    bigAlert('FIN DE LA AVENTURA', `Desciendes al piso ${ended.floor}: ${ended.name}. Pulsa R o Nueva partida para volver a jugar.`, '#7fd67f');
   }
 
   // Cambio de sala. Entras por el lado opuesto de la salida.
@@ -1015,6 +1003,7 @@
         player.vx = 0;
         player.vy = 0;
         player.dashT = 0;
+        player.hookT = 0;
         player.atkT = 0;
         curRoom().explored = true;
         notify('Despiertas en el último punto de guardado.', '#8fdcff');
@@ -1028,7 +1017,7 @@
 
   // ---------- Dibujo de la sala ----------
   function drawBackground(r) {
-    const pal = PALETTES[biomeOf(r.gy)];
+    const pal = PALETTES[biomeOfRoom(r)];
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, pal.sky[0]);
     g.addColorStop(1, pal.sky[1]);
@@ -1065,7 +1054,7 @@
   }
 
   function drawTiles(r) {
-    const pal = PALETTES[biomeOf(r.gy)];
+    const pal = PALETTES[biomeOfRoom(r)];
     for (let ty = 0; ty < RH; ty++) {
       for (let tx = 0; tx < RW; tx++) {
         const v = r.tiles[ty][tx];
@@ -1297,7 +1286,6 @@
 
   // Anclajes del gancho y cuerda mientras se vuela hacia uno
   function drawAnchors(r) {
-    if (!r.anchors) return;
     const ready = held('gancho');
     r.anchors.forEach((a) => {
       const pulse = 6 + Math.sin(frame * 0.15) * 2;
@@ -1383,7 +1371,7 @@
   }
 
   function drawForeground(r) {
-    const pal = PALETTES[biomeOf(r.gy)];
+    const pal = PALETTES[biomeOfRoom(r)];
     const camShift = player.x + player.w / 2 - W / 2;
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     [60, 420, 780].forEach((bx) => {
@@ -1419,7 +1407,7 @@
       ctx.arc(x, 22, 8, 0, Math.PI * 2);
       ctx.fill();
     }
-    ABIL_ICON_ORDER().forEach((ab, i) => {
+    ['dash', 'djump', 'gancho'].forEach((ab, i) => {
       const x = 16 + i * 30;
       ctx.fillStyle = player.abil[ab] ? ABILITIES[ab].color : '#2a2a38';
       ctx.fillRect(x, 40, 22, 6);
@@ -1447,7 +1435,7 @@
 
     // Aviso grande
     if (big) {
-      const alpha = Math.min(1, big.t / 40, (260 - (260 - big.t)) / 20);
+      const alpha = Math.min(1, big.t / 40, big.t / 20);
       ctx.globalAlpha = Math.max(0, alpha);
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillRect(W / 2 - 320, 110, 640, 96);
@@ -1471,10 +1459,6 @@
     }
   }
 
-  function ABIL_ICON_ORDER() {
-    return ['dash', 'djump', 'gancho'];
-  }
-
   function wrapText(text, x, y, maxW, lh) {
     const words = text.split(' ');
     let line = '';
@@ -1496,6 +1480,54 @@
   function drawEnd() {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, 0, W, H);
+  }
+
+  // ---------- Pantalla de inicio ----------
+  function drawTitle() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#07050c');
+    g.addColorStop(1, '#1c1430');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // Siluetas de torres y columnas al fondo
+    ctx.fillStyle = '#120d1e';
+    for (let i = 0; i < 9; i++) {
+      const x = i * 120 + 20;
+      const h = 160 + ((i * 53) % 140);
+      ctx.fillRect(x, H - h, 70, h);
+      ctx.beginPath();
+      ctx.moveTo(x - 8, H - h);
+      ctx.lineTo(x + 35, H - h - 40);
+      ctx.lineTo(x + 78, H - h);
+      ctx.fill();
+    }
+    const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, W * 0.65);
+    v.addColorStop(0, 'rgba(0,0,0,0)');
+    v.addColorStop(1, 'rgba(0,0,0,0.75)');
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffc86a';
+    ctx.font = 'bold 60px Consolas, "Courier New", monospace';
+    ctx.fillText('PIXEL QUEST', W / 2, 170);
+    ctx.fillStyle = '#b89cff';
+    ctx.font = '20px Consolas, "Courier New", monospace';
+    ctx.fillText('METROIDVANIA 2.5D', W / 2, 206);
+
+    ctx.fillStyle = '#e8e2d4';
+    ctx.font = '16px Segoe UI, system-ui, sans-serif';
+    ctx.fillText('Flechas: mover  ·  Espacio: saltar  ·  J: atacar  ·  K o Shift: dash', W / 2, 300);
+    ctx.fillText('E: guardado o grieta  ·  Q: gancho  ·  M: mapa grande  ·  R: nueva partida', W / 2, 330);
+    ctx.fillText('Objetivo: sigue las zonas en orden y vence al guardián de la última', W / 2, 360);
+
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+      ctx.fillStyle = '#ffc86a';
+      ctx.font = 'bold 22px Consolas, "Courier New", monospace';
+      ctx.fillText('Pulsa ENTER o haz clic para empezar', W / 2, 470);
+    }
+    ctx.textAlign = 'left';
   }
 
   function render() {
@@ -1537,7 +1569,7 @@
       const color = e.need === 'key' ? (e.opened ? '#6a6a80' : '#ffd23f')
         : e.need === 'secret' ? '#ffc86a'
           : e.need ? ABILITIES[e.need].color
-          : e.src !== undefined ? '#ff9a6a' : '#5a5a72';
+            : e.src !== undefined ? '#ff9a6a' : '#5a5a72';
       m.strokeStyle = color;
       m.lineWidth = e.need || e.src !== undefined ? 3 : 2;
       m.beginPath();
@@ -1577,7 +1609,7 @@
         }
         return;
       }
-      const accent = PALETTES[biomeOf(r.gy)].accent;
+      const accent = PALETTES[biomeOfRoom(r)].accent;
       m.fillStyle = r.i === world.cur ? '#ffd23f' : r.cleared ? '#2b3a2b' : '#2a2a40';
       m.fillRect(x, y, cell, cell);
       m.strokeStyle = accent;
@@ -1602,7 +1634,6 @@
       }
       m.textAlign = 'left';
 
-      // Entradas de sala con indicador de puerta de llave cerrada
       if (showIcons && r.i !== world.cur) {
         m.fillStyle = accent;
         m.globalAlpha = 0.25;
@@ -1649,54 +1680,6 @@
     drawWorldMap(m, 26, 5, 5, 5, true);
   }
 
-  // ---------- Pantalla de inicio ----------
-  function drawTitle() {
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, '#07050c');
-    g.addColorStop(1, '#1c1430');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-
-    // Siluetas de torres y columnas al fondo
-    ctx.fillStyle = '#120d1e';
-    for (let i = 0; i < 9; i++) {
-      const x = i * 120 + 20;
-      const h = 160 + ((i * 53) % 140);
-      ctx.fillRect(x, H - h, 70, h);
-      ctx.beginPath();
-      ctx.moveTo(x - 8, H - h);
-      ctx.lineTo(x + 35, H - h - 40);
-      ctx.lineTo(x + 78, H - h);
-      ctx.fill();
-    }
-    const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, W * 0.65);
-    v.addColorStop(0, 'rgba(0,0,0,0)');
-    v.addColorStop(1, 'rgba(0,0,0,0.75)');
-    ctx.fillStyle = v;
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#ffc86a';
-    ctx.font = 'bold 60px Consolas, "Courier New", monospace';
-    ctx.fillText('PIXEL QUEST', W / 2, 170);
-    ctx.fillStyle = '#b89cff';
-    ctx.font = '20px Consolas, "Courier New", monospace';
-    ctx.fillText('METROIDVANIA 2.5D', W / 2, 206);
-
-    ctx.fillStyle = '#e8e2d4';
-    ctx.font = '16px Segoe UI, system-ui, sans-serif';
-    ctx.fillText('Flechas: mover  ·  Espacio: saltar  ·  J: atacar  ·  K o Shift: dash', W / 2, 300);
-    ctx.fillText('E: guardado o grieta  ·  Q: gancho  ·  M: mapa grande  ·  R: nueva partida', W / 2, 330);
-    ctx.fillText('Objetivo: vence al guardián de la última sala y baja la escalera', W / 2, 360);
-
-    if (Math.floor(Date.now() / 500) % 2 === 0) {
-      ctx.fillStyle = '#ffc86a';
-      ctx.font = 'bold 22px Consolas, "Courier New", monospace';
-      ctx.fillText('Pulsa ENTER o haz clic para empezar', W / 2, 470);
-    }
-    ctx.textAlign = 'left';
-  }
-
   // ---------- Bucle de juego a 60 fps ----------
   let acc = 0;
   let last = 0;
@@ -1738,6 +1721,7 @@
       if (!keys[act]) pressed[act] = true;
       keys[act] = true;
     });
+
     // Botones táctiles y de ratón: se mantienen pulsados mientras el dedo o el ratón están encima
     document.querySelectorAll('[data-act]').forEach((btn) => {
       const act = btn.dataset.act;
@@ -1755,6 +1739,7 @@
       btn.addEventListener('pointerleave', up);
       btn.addEventListener('pointercancel', up);
     });
+
     window.addEventListener('keyup', (e) => {
       const act = KEYMAP[e.key];
       if (act) keys[act] = false;
@@ -1780,13 +1765,14 @@
 
   // Exposición para pruebas automáticas (no afecta al juego)
   window.MV = {
-    genWorld, simulate, RW, RH, GX, GY, TS, W, H,
+    genWorld, simulate, RW, RH, GX, GY, TS, W, H, BLOCKS,
     get world() { return world; },
     get player() { return player; },
     step, newGame,
     keys: () => keys,
     press: (k) => { pressed[k] = true; },
     isEnded: () => !!ended,
+    blockOf: blockOfRoom,
   };
   if (typeof document !== 'undefined' && document.getElementById('game')) init();
 })();
