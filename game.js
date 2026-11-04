@@ -279,7 +279,72 @@
     return { far, mid };
   }
 
+  // Elige un diseño de sala que el jugador pueda recorrer entero. Si ninguno sirve, sala lisa.
   function genRoomTiles(room) {
+    for (const p of shuffle(['platforms', 'stairs', 'pillars', 'pit', 'shaft', 'ledges'])) {
+      const t = makeRoomTiles(room, p);
+      if (roomReachable(t, room.conn)) return t;
+    }
+    return makeRoomTiles(room, 'none');
+  }
+
+  // Modelo sencillo de movimiento: andar, subir o bajar un escalón, saltar hasta 3 casillas y caer.
+  // Comprueba que todas las casillas donde se puede estar son alcanzables desde las salidas.
+  function roomReachable(t, conn) {
+    const passable = (x, y) => x >= 0 && x < RW && y >= 0 && y < RH && (t[y][x] === 0 || t[y][x] === 3);
+    const solidBelow = (x, y) => y + 1 < RH && (t[y + 1][x] === 1 || t[y + 1][x] === 2);
+    const stand = (x, y) => passable(x, y) && solidBelow(x, y);
+
+    const gaps = [];
+    if (conn.l) GAP_Y.forEach((y) => gaps.push([0, y]));
+    if (conn.r) GAP_Y.forEach((y) => gaps.push([RW - 1, y]));
+    if (conn.u) GAP_X.forEach((x) => gaps.push([x, 0]));
+    if (conn.d) GAP_X.forEach((x) => gaps.push([x, RH - 1]));
+    if (!gaps.length) return true;
+
+    const starts = [];
+    for (let y = 0; y < RH; y++) {
+      for (let x = 0; x < RW; x++) {
+        if (stand(x, y) && gaps.some(([gx, gy]) => Math.abs(gx - x) <= 4 && Math.abs(gy - y) <= 4)) {
+          starts.push([x, y]);
+        }
+      }
+    }
+    if (!starts.length) return false;
+
+    const seen = new Set(starts.map(([x, y]) => y * RW + x));
+    const queue = [...starts];
+    const add = (x, y) => {
+      if (!stand(x, y)) return;
+      const k = y * RW + x;
+      if (!seen.has(k)) {
+        seen.add(k);
+        queue.push([x, y]);
+      }
+    };
+    for (let qi = 0; qi < queue.length; qi++) {
+      const [x, y] = queue[qi];
+      [-1, 1].forEach((dx) => {
+        add(x + dx, y);
+        add(x + dx, y + 1);
+        if (passable(x, y - 1) && passable(x + dx, y - 1)) add(x + dx, y - 1);
+      });
+      for (let dx = -4; dx <= 4; dx++) {
+        if (dx === 0) continue;
+        for (let k = 1; k <= 3; k++) add(x + dx, y - k);
+        for (let k = 1; k <= 8; k++) add(x + dx, y + k);
+      }
+    }
+
+    for (let y = 0; y < RH; y++) {
+      for (let x = 0; x < RW; x++) {
+        if (stand(x, y) && !seen.has(y * RW + x)) return false;
+      }
+    }
+    return true;
+  }
+
+  function makeRoomTiles(room, forcedPattern) {
     const t = Array.from({ length: RH }, () => new Array(RW).fill(1));
     for (let y = 1; y < RH - 1; y++) {
       for (let x = 1; x < RW - 1; x++) t[y][x] = 0;
@@ -300,7 +365,7 @@
     const row = (y, x0, len, v) => {
       for (let x = x0; x < x0 + len; x++) put(x, y, v);
     };
-    const pattern = pick(['platforms', 'stairs', 'pillars', 'pit', 'shaft', 'ledges']);
+    const pattern = forcedPattern;
     if (pattern === 'platforms') {
       // Plataformas de un sentido a distintas alturas
       [14, 11, 8, 5].forEach((ly) => {
@@ -329,7 +394,7 @@
       row(13, RW - 9, 5, 2);
       row(9, 9, 4, 2);
       row(9, RW - 13, 4, 2);
-    } else {
+    } else if (pattern === 'ledges') {
       // Repisas en ascenso hacia un lado
       row(13, 3, 4, 2);
       row(10, 8, 4, 2);
@@ -1421,8 +1486,11 @@
       const x = x0 + r.gx * (cell + gap);
       const y = y0 + r.gy * (cell + gap);
       if (!r.explored) {
-        m.fillStyle = '#100e16';
+        m.fillStyle = '#14111c';
         m.fillRect(x, y, cell, cell);
+        m.strokeStyle = '#2e2a40';
+        m.lineWidth = 1;
+        m.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
         if (showIcons) {
           m.fillStyle = '#2a2638';
           m.font = `${Math.round(cell * 0.4)}px Consolas, monospace`;
@@ -1592,6 +1660,23 @@
       e.preventDefault();
       if (!keys[act]) pressed[act] = true;
       keys[act] = true;
+    });
+    // Botones táctiles y de ratón: se mantienen pulsados mientras el dedo o el ratón están encima
+    document.querySelectorAll('[data-act]').forEach((btn) => {
+      const act = btn.dataset.act;
+      const down = (e) => {
+        e.preventDefault();
+        started = true;
+        if (!keys[act]) pressed[act] = true;
+        keys[act] = true;
+      };
+      const up = () => {
+        keys[act] = false;
+      };
+      btn.addEventListener('pointerdown', down);
+      btn.addEventListener('pointerup', up);
+      btn.addEventListener('pointerleave', up);
+      btn.addEventListener('pointercancel', up);
     });
     window.addEventListener('keyup', (e) => {
       const act = KEYMAP[e.key];

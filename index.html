@@ -27,12 +27,28 @@
     button { font-family: inherit; font-weight: 600; font-size: 14px; color: var(--text); background: #2a2438; border: 1px solid #4a4266; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
     button:hover { border-color: #ffc86a; }
     button:focus-visible { outline: 2px solid #ffc86a; outline-offset: 2px; }
+    .touch { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; width: min(960px, 100%); }
+    .pad { display: flex; gap: 10px; }
+    .touch button { min-width: 84px; min-height: 60px; font-size: 18px; user-select: none; touch-action: none; }
+    .touch .attack { min-width: 150px; background: #6a2424; border-color: #ff6a5a; font-size: 22px; letter-spacing: 2px; }
+    .touch .attack:hover { border-color: #ffc86a; }
   </style>
 </head>
 <body>
   <h1>PIXEL QUEST</h1>
   <div class="stage">
     <canvas id="game" width="960" height="576" tabindex="0" aria-label="Escena del juego"></canvas>
+  </div>
+  <div class="touch" aria-label="Controles en pantalla">
+    <div class="pad">
+      <button type="button" data-act="left" aria-label="Izquierda">←</button>
+      <button type="button" data-act="right" aria-label="Derecha">→</button>
+    </div>
+    <div class="pad">
+      <button type="button" data-act="jump" aria-label="Saltar">Saltar</button>
+      <button type="button" data-act="dash" aria-label="Dash">Dash</button>
+      <button type="button" data-act="attack" class="attack" aria-label="Atacar">ATACAR</button>
+    </div>
   </div>
   <div class="side">
     <section class="panel">
