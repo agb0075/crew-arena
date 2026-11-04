@@ -209,7 +209,10 @@
     // Objetos: cada uno en un sitio cualquiera de su bloque (todo el bloque es alcanzable desde su entrada)
     const placed = [];
     for (let b = 0; b < BLOCKS - 1; b++) {
-      placed.push({ room: pick(blockCells[b]), item: GATES[b] });
+      // El objeto del bloque b va en su sala de entrada: todo el bloque se alcanza sólo por ahí,
+      // así que se recoge antes de llegar a cualquier puerta del bloque
+      const entryRoom = b === 0 ? 0 : crossings[b - 1].b;
+      placed.push({ room: entryRoom, item: GATES[b] });
     }
 
     // Guardián: la sala más lejos de la entrada del último bloque
@@ -274,7 +277,7 @@
 
   // Elige un diseño de sala que el jugador pueda recorrer entero. Si ninguno sirve, sala lisa.
   function genRoomTiles(room) {
-    for (const p of shuffle(['platforms', 'stairs', 'pillars', 'pit', 'shaft', 'ledges'])) {
+    for (const p of shuffle(['platforms', 'stairs', 'pillars', 'pit', 'shaft', 'ledges', 'islands', 'climb', 'bridge', 'checker'])) {
       const t = makeRoomTiles(room, p);
       if (roomReachable(t, room.conn)) return t;
     }
@@ -386,6 +389,30 @@
       row(13, 3, 4, 2);
       row(10, 8, 4, 2);
       row(7, 13, 5, 2);
+    } else if (pattern === 'islands') {
+      // Islas separadas por huecos que se salvan con un salto
+      row(14, 4, 3, 2);
+      row(11, 11, 3, 2);
+      row(8, 18, 3, 2);
+      row(11, 24, 3, 2);
+    } else if (pattern === 'climb') {
+      // Escalada en zigzag hacia arriba
+      row(15, 3, 3, 2);
+      row(12, 8, 3, 2);
+      row(9, 3, 3, 2);
+      row(6, 8, 3, 2);
+    } else if (pattern === 'bridge') {
+      // Puente sobre un foso de pinchos
+      row(RH - 2, 8, 14, 3);
+      row(13, 5, 20, 2);
+    } else if (pattern === 'checker') {
+      // Plataformas alternas a dos alturas
+      row(14, 4, 3, 2);
+      row(10, 8, 3, 2);
+      row(14, 12, 3, 2);
+      row(10, 16, 3, 2);
+      row(14, 20, 3, 2);
+      row(10, 24, 3, 2);
     }
 
     // Pinchos en el suelo, salvo en la entrada y en la sala del guardián
@@ -1040,6 +1067,7 @@
       });
     });
 
+    drawTheme(r, camShift);
     r.bg.mid.forEach((c) => {
       const x = (((c.x - camShift * 0.2) % W) + W) % W;
       [x - W, x].forEach((xx) => {
@@ -1051,6 +1079,101 @@
         ctx.globalAlpha = 1;
       });
     });
+  }
+
+  // Fondo temático por bloque: cada zona tiene su propio paisaje en parallax
+  const THEMES = ['bosque', 'cripta', 'ruinas', 'mina', 'fortaleza', 'trono'];
+  function drawTheme(r, camShift) {
+    const theme = THEMES[r.block];
+    const off = (k) => -camShift * k;
+    ctx.save();
+    if (theme === 'bosque') {
+      // Troncos y copas redondas
+      for (let i = 0; i < 9; i++) {
+        const x = ((i * 130 + off(0.15)) % W + W) % W;
+        ctx.fillStyle = '#0c2216';
+        ctx.fillRect(x, H - 230 - (i % 3) * 30, 14, 230 + (i % 3) * 30);
+        ctx.beginPath();
+        ctx.arc(x + 7, H - 240 - (i % 3) * 30, 46, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (theme === 'cripta') {
+      // Arcos góticos y lápidas con velas parpadeantes
+      for (let i = 0; i < 6; i++) {
+        const x = ((i * 170 + off(0.15)) % W + W) % W;
+        ctx.fillStyle = '#1c1430';
+        ctx.fillRect(x, 120, 16, H - 120);
+        ctx.fillRect(x + 60, 120, 16, H - 120);
+        ctx.beginPath();
+        ctx.moveTo(x, 120);
+        ctx.quadraticCurveTo(x + 38, 40, x + 76, 120);
+        ctx.lineWidth = 16;
+        ctx.strokeStyle = '#1c1430';
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        const flick = 0.6 + 0.4 * Math.sin(frame * 0.2 + i);
+        ctx.fillStyle = `rgba(255,190,90,${flick})`;
+        ctx.beginPath();
+        ctx.arc(x + 38, 150, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (theme === 'ruinas') {
+      // Columnas rotas y dunas de arena
+      ctx.fillStyle = '#4a3a22';
+      for (let i = 0; i < 6; i++) {
+        const x = ((i * 170 + off(0.15)) % W + W) % W;
+        ctx.fillRect(x, H - 300 + (i % 2) * 40, 26, 300 - (i % 2) * 40);
+        ctx.fillRect(x - 6, H - 300 + (i % 2) * 40, 38, 10);
+      }
+      ctx.fillStyle = '#6a5230';
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      for (let x = 0; x <= W; x += 40) ctx.lineTo(x, H - 40 - 30 * Math.sin((x + off(0.3)) / 120));
+      ctx.lineTo(W, H);
+      ctx.fill();
+    } else if (theme === 'mina') {
+      // Cadenas colgantes y cristales
+      for (let i = 0; i < 8; i++) {
+        const x = ((i * 125 + off(0.15)) % W + W) % W;
+        ctx.strokeStyle = '#3d3d4a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, 60 + (i % 4) * 40);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.fillStyle = 'rgba(160,220,255,0.35)';
+        ctx.beginPath();
+        ctx.moveTo(x - 8, 80 + (i % 4) * 40);
+        ctx.lineTo(x, 120 + (i % 4) * 40);
+        ctx.lineTo(x + 8, 80 + (i % 4) * 40);
+        ctx.fill();
+      }
+    } else if (theme === 'fortaleza') {
+      // Almenas y estandartes rojos
+      ctx.fillStyle = '#2a1414';
+      for (let x = -20; x < W + 20; x += 40) ctx.fillRect(((x + off(0.12)) % W + W) % W, H - 380, 26, 40);
+      for (let i = 0; i < 5; i++) {
+        const x = ((i * 200 + off(0.12)) % W + W) % W;
+        ctx.fillStyle = '#7a1c1c';
+        ctx.fillRect(x, 60, 40, 150);
+        ctx.fillStyle = '#c9a03a';
+        ctx.fillRect(x + 16, 60, 8, 150);
+      }
+    } else if (theme === 'trono') {
+      // Resplandor de lava y el trono al fondo
+      const glow = ctx.createRadialGradient(W / 2, H, 20, W / 2, H, W * 0.6);
+      glow.addColorStop(0, 'rgba(255,90,40,0.35)');
+      glow.addColorStop(1, 'rgba(255,90,40,0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#1a0a0a';
+      const tx = ((W / 2 + off(0.1)) % W + W) % W;
+      ctx.fillRect(tx - 40, H - 260, 80, 260);
+      ctx.fillRect(tx - 60, H - 300, 14, 300);
+      ctx.fillRect(tx + 46, H - 300, 14, 300);
+    }
+    ctx.restore();
   }
 
   function drawTiles(r) {
