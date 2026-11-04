@@ -304,12 +304,14 @@
     if (conn.d) GAP_X.forEach((x) => gaps.push([x, RH - 1]));
     if (!gaps.length) return true;
 
+    // Puntos de llegada: donde aparece el jugador al cruzar cada salida
+    const arrival = (x, y) =>
+      (conn.l && x <= 3 && y >= 12) || (conn.r && x >= RW - 4 && y >= 12) ||
+      (conn.u && y <= 3 && x >= 12 && x <= 17) || (conn.d && y >= RH - 3 && x >= 12 && x <= 17);
     const starts = [];
     for (let y = 0; y < RH; y++) {
       for (let x = 0; x < RW; x++) {
-        if (stand(x, y) && gaps.some(([gx, gy]) => Math.abs(gx - x) <= 4 && Math.abs(gy - y) <= 4)) {
-          starts.push([x, y]);
-        }
+        if (stand(x, y) && arrival(x, y)) starts.push([x, y]);
       }
     }
     if (!starts.length) return false;
@@ -368,6 +370,12 @@
     const row = (y, x0, len, v) => {
       for (let x = x0 - 1; x < x0 + len + 1; x++) put(x, y, v);
     };
+    // Escalera de plataformas de un sentido desde el suelo hasta la puerta del techo. Se coloca primero,
+    // para que ningún diseño la corte. Los escalones están a dos casillas de altura: cada salto es fácil.
+    if (c.u) {
+      [[14, 9, 3], [12, 12, 4], [10, 9, 3], [8, 12, 4], [6, 9, 3], [4, 12, 4], [2, 12, 6]]
+        .forEach(([y, x0, len]) => row(y, x0, len, 2));
+    }
     const pattern = forcedPattern;
     if (pattern === 'stairs') {
       const mirror = Math.random() < 0.5;
