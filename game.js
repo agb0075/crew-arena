@@ -1,5 +1,5 @@
-// Metroidvania 2.5D: mundo lineal en seis bloques, puertas que se abren con el objeto del bloque anterior,
-// pasadizos secretos y un guardián al final. Está pensado para no tener nunca un callejón sin salida.
+// Metroidvania 2.5D: seis filas de salas recorridas en serpiente. Cada fila se baja por una trampilla
+// del suelo, que puede tener una llave. Sin puertas en el techo, y siempre hay un orden de juego posible.
 (() => {
   'use strict';
 
@@ -9,9 +9,9 @@
   const RH = 18;                    // casillas por sala (alto)
   const W = RW * TS;                // 960: una sala ocupa toda la pantalla
   const H = RH * TS;                // 576
-  const GX = 9;                     // salas del mundo en horizontal
-  const GY = 6;                     // salas del mundo en vertical
-  const BLOCKS = 6;                 // bloques de 3x3 salas, en orden lineal
+  const GX = 9;                     // salas por fila
+  const GY = 6;                     // filas: cada una es un bloque del orden de juego
+  const BLOCKS = GY;
   const GRAV = 0.55;
   const MAX_FALL = 12;
   const RUN_ACC = 0.6;
@@ -29,13 +29,10 @@
   const RESPAWN_FRAMES = 100;
   const HOOK_FRAMES = 40;
   const HOOK_RANGE = 240;
-  const GAP_Y = [13, 14, 15, 16];      // filas de las salidas laterales
-  const GAP_X = [13, 14, 15, 16];   // columnas de las salidas superior e inferior
+  const GAP_Y = [13, 14, 15, 16];   // salidas laterales a la altura del suelo
+  const GAP_X = [13, 14, 15, 16];   // trampilla del suelo (y hueco del techo, si lo hubiera)
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  // Bloques de 3x3 salas en serpiente: el orden es el orden de juego
-  const BLOCK_ORDER = [[0, 0], [1, 0], [2, 0], [2, 1], [1, 1], [0, 1]];
-  // Objeto que abre la puerta entre el bloque b y el b+1. Cada uno está en el bloque b.
-  // Las habilidades se tienen desde el inicio, así que sólo las fronteras con llave tienen puerta cerrada.
+  // Objeto que abre la trampilla de la fila b. Las habilidades se tienen desde el inicio.
   const GATES = [null, 'key', null, 'key', null];
   const ABILITIES = {
     dash: { name: 'Dash', color: '#7fd6ff', hint: 'K o Shift: impulso horizontal.' },
@@ -69,7 +66,6 @@
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
   const shuffle = (arr) => arr.map((v) => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
   const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-  const blockOfRoom = (r) => r.block;
   const biomeOfRoom = (r) => Math.min(BIOMES.length - 1, Math.floor((r.block * BIOMES.length) / BLOCKS));
 
   // ---------- Comprobación de solvencia ----------
@@ -135,25 +131,13 @@
     throw new Error('No se pudo generar un mundo jugable');
   }
 
-  // Mundo lineal: cada bloque tiene todas sus salas conectadas sin puertas. Entre bloques hay una sola
-  // puerta, que se abre con el objeto del bloque anterior. Así el orden de juego siempre es posible.
+  // Filas en serpiente: la fila b entra por un extremo y sale por el otro. La salida baja a la fila siguiente
+  // por una trampilla de un sentido, en la misma columna donde entra la fila siguiente.
   function tryWorld() {
     const N = GX * GY;
-    const idOf = (x, y) => y * GX + x;
-    const adjacent = (a, b) => Math.abs((a % GX) - (b % GX)) + Math.abs(Math.floor(a / GX) - Math.floor(b / GX)) === 1;
-
-    const blockIdx = new Array(N).fill(-1);
-    const blockCells = BLOCK_ORDER.map(([bx, by], b) => {
-      const cells = [];
-      for (let dy = 0; dy < 3; dy++) {
-        for (let dx = 0; dx < 3; dx++) {
-          const id = idOf(bx * 3 + dx, by * 3 + dy);
-          blockIdx[id] = b;
-          cells.push(id);
-        }
-      }
-      return cells;
-    });
+    const id = (x, y) => y * GX + x;
+    const entryX = (row) => (row % 2 === 0 ? 0 : GX - 1);
+    const exitX = (row) => (row % 2 === 0 ? GX - 1 : 0);
 
     const edges = [];
     const addEdge = (a, b, need = null) => {
@@ -162,91 +146,37 @@
       return e;
     };
 
-    // Dentro de cada bloque: árbol de expansión (conexo) y bucles extra
-    const loopsOf = blockCells.map((cells) => {
-      const inTree = new Set([cells[0]]);
-      let last = cells[0];
-      while (inTree.size < cells.length) {
-        const cand = [];
-        for (const a of inTree) {
-          for (const b of cells) {
-            if (!inTree.has(b) && adjacent(a, b)) cand.push([a, b]);
-          }
-        }
-        const fromLast = cand.filter(([x]) => x === last);
-        const [a, b] = fromLast.length && Math.random() < 0.6 ? pick(fromLast) : pick(cand);
-        inTree.add(b);
-        last = b;
-        addEdge(a, b);
-      }
-      const pairs = [];
-      cells.forEach((a) => cells.forEach((b) => {
-        if (a < b && adjacent(a, b) && !edges.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))) {
-          pairs.push([a, b]);
-        }
-      }));
-      return shuffle(pairs).slice(0, 3).map(([a, b]) => addEdge(a, b));
-    });
-
-    // Pasadizo secreto y puerta de un sentido: sólo en bucles, así siempre hay otro camino
-    loopsOf.forEach((loops) => {
-      if (loops.length >= 2) {
-        loops[0].need = 'secret';
-        loops[1].src = Math.random() < 0.5 ? loops[1].a : loops[1].b;
-      }
-    });
-
-    // Puertas entre bloques: una sola arista por cada frontera, con el requisito del bloque anterior
-    const crossings = [];
-    for (let b = 0; b < BLOCKS - 1; b++) {
-      const pairs = [];
-      blockCells[b].forEach((a) => blockCells[b + 1].forEach((c) => {
-        if (adjacent(a, c)) pairs.push([a, c]);
-      }));
-      const [a, c] = pick(pairs);
-      crossings.push(addEdge(a, c, GATES[b]));
-      // Frontera sin llave: un segundo pasillo abierto para que las zonas estén más conectadas
-      if (!GATES[b] && pairs.length > 1) {
-        const [a2, c2] = pick(pairs.filter(([x, y]) => x !== a || y !== c));
-        addEdge(a2, c2, null);
-      }
+    // Cada fila es un tramo horizontal de salas con puertas laterales a la altura del suelo
+    for (let row = 0; row < GY; row++) {
+      for (let x = 0; x < GX - 1; x++) addEdge(id(x, row), id(x + 1, row));
     }
 
-    // Objetos: cada uno en un sitio cualquiera de su bloque (todo el bloque es alcanzable desde su entrada)
+    // Trampillas: sólo se cruzan hacia abajo, desde la sala de salida de una fila
+    for (let b = 0; b < BLOCKS - 1; b++) {
+      const upper = id(exitX(b), b);
+      const lower = id(entryX(b + 1), b + 1);
+      const e = addEdge(upper, lower, GATES[b]);
+      e.src = upper;
+    }
+
+    // Objetos: cada llave en la sala de entrada de su fila, así se recoge antes de la trampilla
     const placed = [];
     for (let b = 0; b < BLOCKS - 1; b++) {
-      // El objeto del bloque b va en su sala de entrada: todo el bloque se alcanza sólo por ahí,
-      // así que se recoge antes de llegar a cualquier puerta del bloque
-      const entryRoom = b === 0 ? 0 : crossings[b - 1].b;
-      if (GATES[b]) placed.push({ room: entryRoom, item: GATES[b] });
+      if (GATES[b]) placed.push({ room: id(entryX(b), b), item: GATES[b] });
     }
 
-    // Guardián: la sala más lejos de la entrada del último bloque
-    const entry = crossings[BLOCKS - 2].b;
-    const dist = new Map([[entry, 0]]);
-    const queue = [entry];
-    for (let qi = 0; qi < queue.length; qi++) {
-      const cur = queue[qi];
-      edges.forEach((e) => {
-        if (e.need || e.src !== undefined) return;
-        const other = e.a === cur ? e.b : e.b === cur ? e.a : -1;
-        if (other >= 0 && blockIdx[other] === BLOCKS - 1 && !dist.has(other)) {
-          dist.set(other, dist.get(cur) + 1);
-          queue.push(other);
-        }
-      });
-    }
-    const bossIdx = [...dist.entries()].reduce((best, cur) => (cur[1] > best[1] ? cur : best))[0];
+    // Guardián: al final de la última fila
+    const bossIdx = id(exitX(BLOCKS - 1), BLOCKS - 1);
 
-    // Comprobación final: con los objetos del camino se llega al guardián
     const check = simulate(edges, placed);
     if (!check.R.has(bossIdx)) return null;
 
     const rooms = [];
     for (let i = 0; i < N; i++) {
+      const row = Math.floor(i / GX);
       rooms.push({
-        i, gx: i % GX, gy: Math.floor(i / GX), block: blockIdx[i], depth: blockIdx[i],
-        conn: { l: null, r: null, u: null, d: null },
+        i, gx: i % GX, gy: row, block: row, depth: row,
+        conn: { l: null, r: null, u: null, d: null }, open: null,
         tiles: null, enemies: [], pickup: null, save: null, exit: null, anchors: [],
         boss: i === bossIdx, cleared: false, explored: false, bg: null,
       });
@@ -260,6 +190,16 @@
       else if (dx === -1) { A.conn.l = e; B.conn.r = e; }
       else if (dy === 1) { A.conn.d = e; B.conn.u = e; }
       else { A.conn.u = e; B.conn.d = e; }
+    });
+
+    // Salidas abiertas desde cada sala: una trampilla sólo es salida desde la sala de arriba
+    rooms.forEach((r) => {
+      const open = {};
+      ['l', 'r', 'u', 'd'].forEach((dir) => {
+        const e = r.conn[dir];
+        open[dir] = !!e && (e.src === undefined || e.src === r.i);
+      });
+      r.open = open;
     });
 
     rooms.forEach((r) => {
@@ -285,29 +225,24 @@
   function genRoomTiles(room) {
     for (const p of shuffle(['stairs', 'pit', 'shaft', 'ledges', 'islands', 'climb', 'bridge', 'checker'])) {
       const t = makeRoomTiles(room, p);
-      if (roomReachable(t, room.conn)) return t;
+      if (roomReachable(t, room.open)) return t;
     }
     return makeRoomTiles(room, 'none');
   }
 
   // Modelo sencillo de movimiento: andar, subir o bajar un escalón, saltar hasta 3 casillas y caer.
-  // Comprueba que todas las casillas donde se puede estar son alcanzables desde las salidas.
-  function roomReachable(t, conn) {
+  // Comprueba que todas las casillas donde se puede estar son alcanzables desde las entradas de la sala.
+  function roomReachable(t, open) {
     const passable = (x, y) => x >= 0 && x < RW && y >= 0 && y < RH && (t[y][x] === 0 || t[y][x] === 3);
     const solidBelow = (x, y) => y + 1 < RH && (t[y + 1][x] === 1 || t[y + 1][x] === 2);
     const stand = (x, y) => passable(x, y) && solidBelow(x, y);
 
-    const gaps = [];
-    if (conn.l) GAP_Y.forEach((y) => gaps.push([0, y]));
-    if (conn.r) GAP_Y.forEach((y) => gaps.push([RW - 1, y]));
-    if (conn.u) GAP_X.forEach((x) => gaps.push([x, 0]));
-    if (conn.d) GAP_X.forEach((x) => gaps.push([x, RH - 1]));
-    if (!gaps.length) return true;
+    if (!open.l && !open.r && !open.u && !open.d) return true;
 
-    // Puntos de llegada: donde aparece el jugador al cruzar cada salida
+    // Puntos de llegada: donde aparece el jugador al entrar por cada salida abierta
     const arrival = (x, y) =>
-      (conn.l && x <= 3 && y >= 12) || (conn.r && x >= RW - 4 && y >= 12) ||
-      (conn.u && y <= 3 && x >= 12 && x <= 17) || (conn.d && y >= RH - 3 && x >= 12 && x <= 17);
+      (open.l && x <= 3 && y >= 12) || (open.r && x >= RW - 4 && y >= 12) ||
+      (open.u && y <= 3 && x >= 12 && x <= 17) || (open.d && y >= RH - 3 && x >= 12 && x <= 17);
     const starts = [];
     for (let y = 0; y < RH; y++) {
       for (let x = 0; x < RW; x++) {
@@ -353,11 +288,11 @@
     for (let y = 1; y < RH - 1; y++) {
       for (let x = 1; x < RW - 1; x++) t[y][x] = 0;
     }
-    const c = room.conn;
-    if (c.l) GAP_Y.forEach((y) => (t[y][0] = 0));
-    if (c.r) GAP_Y.forEach((y) => (t[y][RW - 1] = 0));
-    if (c.u) GAP_X.forEach((x) => (t[0][x] = 0));
-    if (c.d) GAP_X.forEach((x) => (t[RH - 1][x] = 0));
+    const o = room.open;
+    if (o.l) GAP_Y.forEach((y) => (t[y][0] = 0));
+    if (o.r) GAP_Y.forEach((y) => (t[y][RW - 1] = 0));
+    if (o.u) GAP_X.forEach((x) => (t[0][x] = 0));
+    if (o.d) GAP_X.forEach((x) => (t[RH - 1][x] = 0));
 
     // Diseño de la sala. Las salidas quedan libres.
     const inGap = (x, y) =>
@@ -370,12 +305,6 @@
     const row = (y, x0, len, v) => {
       for (let x = x0 - 1; x < x0 + len + 1; x++) put(x, y, v);
     };
-    // Escalera de plataformas de un sentido desde el suelo hasta la puerta del techo. Se coloca primero,
-    // para que ningún diseño la corte. Los escalones están a dos casillas de altura: cada salto es fácil.
-    if (c.u) {
-      [[14, 9, 3], [12, 12, 4], [10, 9, 3], [8, 12, 4], [6, 9, 3], [4, 12, 4], [2, 12, 6]]
-        .forEach(([y, x0, len]) => row(y, x0, len, 2));
-    }
     const pattern = forcedPattern;
     if (pattern === 'stairs') {
       const mirror = Math.random() < 0.5;
@@ -397,23 +326,19 @@
       row(10, 8, 4, 2);
       row(7, 13, 5, 2);
     } else if (pattern === 'islands') {
-      // Islas separadas por huecos que se salvan con un salto
       row(14, 4, 3, 2);
       row(11, 11, 3, 2);
       row(8, 18, 3, 2);
       row(11, 24, 3, 2);
     } else if (pattern === 'climb') {
-      // Escalada en zigzag hacia arriba
       row(15, 3, 3, 2);
       row(12, 8, 3, 2);
       row(9, 3, 3, 2);
       row(6, 8, 3, 2);
     } else if (pattern === 'bridge') {
-      // Puente sobre un foso de pinchos
       row(RH - 2, 8, 14, 3);
       row(13, 5, 20, 2);
     } else if (pattern === 'checker') {
-      // Plataformas alternas a dos alturas
       row(14, 4, 3, 2);
       row(10, 8, 3, 2);
       row(14, 12, 3, 2);
@@ -421,7 +346,6 @@
       row(14, 20, 3, 2);
       row(10, 24, 3, 2);
     }
-
     return t;
   }
 
@@ -436,7 +360,7 @@
     return spots;
   }
 
-  // Objeto de un bloque. Los poderes van en un altar central; las llaves, en cualquier sitio.
+  // Objeto de una fila. Los poderes van en un altar central; las llaves, en cualquier sitio.
   function populateItem(room, item) {
     const inner = groundSpots(room.tiles).filter((s) => s.x >= 3 && s.x <= RW - 4);
     if (!inner.length) return;
@@ -477,7 +401,7 @@
       const sv = spots.find((p) => p.x >= 3 && p.x <= 6) || spots[0];
       room.save = { x: sv.x * TS + 2, y: (sv.y + 1) * TS - 28, w: 28, h: 28 };
     } else if (room.i !== 0) {
-      // Más enemigos y más resistentes según avanzas de bloque
+      // Más enemigos y más resistentes según avanzas de fila
       const count = rnd(1, 2) + (room.block >= 2 ? 1 : 0);
       for (let n = 0; n < count; n++) {
         if (Math.random() < 0.3) {
@@ -663,13 +587,9 @@
     bigAlert('AVENTURA', 'Tienes todas tus habilidades. Consigue las llaves y vence al guardián.');
   }
 
-  // Novedades al entrar en una sala: zona nueva, santuario, centinela y guardián
+  // Novedades al entrar en una sala: fila nueva, santuario, centinela y guardián
   function onEnterRoom(r) {
     r.explored = true;
-    if (r.pickup && r.pickup.item !== 'key' && !r.shrineShown) {
-      r.shrineShown = true;
-      bigAlert('SANTUARIO', `Un poder antiguo espera aquí: ${ABILITIES[r.pickup.item].name}.`, ABILITIES[r.pickup.item].color);
-    }
     if (!r.announced && r.enemies.some((e) => e.sentinel && !e.dead)) {
       r.announced = true;
       notify('Un centinela guarda la llave de esta sala.', '#d9a441');
@@ -797,7 +717,8 @@
       const e = r.conn[dir];
       if (!e || !touch[dir] || passageOpen(r, dir)) return;
       if (e.src !== undefined && e.src !== r.i) {
-        notify('Esta puerta solo se abre desde el otro lado.', '#ff9a6a');
+        // Trampilla vista desde abajo: no es una puerta, no hay nada que avisar
+        return;
       } else if (e.need === 'secret') {
         if (pressed.interact) {
           e.revealed = true;
@@ -810,9 +731,9 @@
         if (p.keys > 0) {
           p.keys--;
           e.opened = true;
-          notify('Llave usada: la puerta se abre.', '#ffd23f');
+          notify('Llave usada: la trampilla se abre.', '#ffd23f');
         } else {
-          notify('Puerta cerrada. Necesitas una llave.', '#ffd23f');
+          notify('Trampilla cerrada. Necesitas una llave.', '#ffd23f');
         }
       } else if (e.need) {
         notify(`Puerta sellada. Necesitas ${ABILITIES[e.need].name}.`, ABILITIES[e.need].color);
@@ -884,6 +805,7 @@
         burst(p.x + p.w / 2, p.y + p.h, '#b07cff', 10);
       }
     }
+
     // Salto de pared: en el aire, pegado a una pared, saltas en sentido contrario
     if (p.wallCD > 0) p.wallCD--;
     if (p.jumpBuf > 0 && !p.onGround && p.wallCD <= 0) {
@@ -994,7 +916,7 @@
     const it = r.pickup;
     if (it.item === 'key') {
       player.keys++;
-      notify('Llave encontrada. Sirve para la puerta del siguiente bloque.', '#ffd23f');
+      notify('Llave encontrada. Sirve para la trampilla de la fila siguiente.', '#ffd23f');
     } else {
       player.abil[it.item] = true;
       bigAlert(`Nueva habilidad: ${ABILITIES[it.item].name}`, ABILITIES[it.item].hint, ABILITIES[it.item].color);
@@ -1082,45 +1004,7 @@
   }
 
   // ---------- Dibujo de la sala ----------
-  function drawBackground(r) {
-    const pal = PALETTES[biomeOfRoom(r)];
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, pal.sky[0]);
-    g.addColorStop(1, pal.sky[1]);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-
-    // Paralaje: el fondo se mueve menos que el jugador
-    const camShift = player.x + player.w / 2 - W / 2;
-
-    ctx.fillStyle = pal.far;
-    r.bg.far.forEach((b) => {
-      const x = (((b.x - camShift * 0.08) % W) + W) % W;
-      [x - W, x].forEach((xx) => {
-        ctx.fillRect(xx, H - b.h, b.w, b.h);
-        ctx.beginPath();
-        ctx.moveTo(xx - 6, H - b.h);
-        ctx.lineTo(xx + b.w / 2, H - b.h - 30);
-        ctx.lineTo(xx + b.w + 6, H - b.h);
-        ctx.fill();
-      });
-    });
-
-    drawTheme(r, camShift);
-    r.bg.mid.forEach((c) => {
-      const x = (((c.x - camShift * 0.2) % W) + W) % W;
-      [x - W, x].forEach((xx) => {
-        ctx.fillStyle = pal.mid;
-        ctx.fillRect(xx, H - c.h, c.w, c.h);
-        ctx.fillStyle = pal.wallHi;
-        ctx.globalAlpha = 0.25;
-        ctx.fillRect(xx, H - c.h, 3, c.h);
-        ctx.globalAlpha = 1;
-      });
-    });
-  }
-
-  // Fondo temático por bloque: cada zona tiene su propio paisaje en parallax
+  // Fondo temático por fila: cada zona tiene su propio paisaje en parallax
   const THEMES = ['bosque', 'cripta', 'ruinas', 'mina', 'fortaleza', 'trono'];
   function drawTheme(r, camShift) {
     const theme = THEMES[r.block];
@@ -1137,7 +1021,7 @@
         ctx.fill();
       }
     } else if (theme === 'cripta') {
-      // Arcos góticos y lápidas con velas parpadeantes
+      // Arcos góticos y velas parpadeantes
       for (let i = 0; i < 6; i++) {
         const x = ((i * 170 + off(0.15)) % W + W) % W;
         ctx.fillStyle = '#1c1430';
@@ -1215,6 +1099,44 @@
     ctx.restore();
   }
 
+  function drawBackground(r) {
+    const pal = PALETTES[biomeOfRoom(r)];
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, pal.sky[0]);
+    g.addColorStop(1, pal.sky[1]);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // Paralaje: el fondo se mueve menos que el jugador
+    const camShift = player.x + player.w / 2 - W / 2;
+
+    ctx.fillStyle = pal.far;
+    r.bg.far.forEach((b) => {
+      const x = (((b.x - camShift * 0.08) % W) + W) % W;
+      [x - W, x].forEach((xx) => {
+        ctx.fillRect(xx, H - b.h, b.w, b.h);
+        ctx.beginPath();
+        ctx.moveTo(xx - 6, H - b.h);
+        ctx.lineTo(xx + b.w / 2, H - b.h - 30);
+        ctx.lineTo(xx + b.w + 6, H - b.h);
+        ctx.fill();
+      });
+    });
+
+    drawTheme(r, camShift);
+    r.bg.mid.forEach((c) => {
+      const x = (((c.x - camShift * 0.2) % W) + W) % W;
+      [x - W, x].forEach((xx) => {
+        ctx.fillStyle = pal.mid;
+        ctx.fillRect(xx, H - c.h, c.w, c.h);
+        ctx.fillStyle = pal.wallHi;
+        ctx.globalAlpha = 0.25;
+        ctx.fillRect(xx, H - c.h, 3, c.h);
+        ctx.globalAlpha = 1;
+      });
+    });
+  }
+
   function drawTiles(r) {
     const pal = PALETTES[biomeOfRoom(r)];
     for (let ty = 0; ty < RH; ty++) {
@@ -1260,15 +1182,14 @@
     }
   }
 
-  // Puertas: cerradas en color de su requisito, abiertas con flecha si son de un sentido
+  // Puertas laterales y trampilla del suelo. Las salidas de arriba no se dibujan: no hay puertas en el techo.
   function drawDoors(r) {
     const spans = {
       l: { x: 0, y: GAP_Y[0] * TS, w: TS, h: GAP_Y.length * TS },
       r: { x: W - TS, y: GAP_Y[0] * TS, w: TS, h: GAP_Y.length * TS },
-      u: { x: GAP_X[0] * TS, y: 0, w: GAP_X.length * TS, h: TS },
       d: { x: GAP_X[0] * TS, y: H - TS, w: GAP_X.length * TS, h: TS },
     };
-    ['l', 'r', 'u', 'd'].forEach((dir) => {
+    ['l', 'r', 'd'].forEach((dir) => {
       const e = r.conn[dir];
       if (!e) return;
       const s = spans[dir];
@@ -1276,7 +1197,7 @@
       const requirement = e.need === 'key' ? '#ffd23f'
         : e.need === 'secret' ? '#8a7a6a'
           : e.need ? ABILITIES[e.need].color : null;
-      if (!open) {
+      if (!open && e.src === undefined) {
         const color = requirement || '#ff9a6a';
         ctx.fillStyle = color;
         ctx.globalAlpha = 0.28 + 0.1 * Math.sin(frame * 0.1);
@@ -1286,19 +1207,19 @@
         ctx.lineWidth = 2;
         ctx.strokeRect(s.x + 1, s.y + 1, s.w - 2, s.h - 2);
         if (e.need === 'key') drawKeyIcon(s.x + s.w / 2, s.y + s.h / 2, color);
-      } else if (e.src !== undefined) {
-        // Puerta de un sentido abierta: flecha que indica el sentido de paso
-        const forward = e.src === r.i;
+      } else if (e.src !== undefined && e.src === r.i) {
+        // Trampilla de un sentido: flecha hacia abajo
         const cx = s.x + s.w / 2;
         const cy = s.y + s.h / 2;
-        const pointX = dir === 'l' ? (forward ? -1 : 1) : dir === 'r' ? (forward ? 1 : -1) : 0;
-        const pointY = dir === 'u' ? (forward ? -1 : 1) : dir === 'd' ? (forward ? 1 : -1) : 0;
-        ctx.fillStyle = '#ff9a6a';
+        const color = requirement || '#ff9a6a';
+        ctx.fillStyle = color;
+        ctx.globalAlpha = open ? 1 : 0.5;
         ctx.beginPath();
-        ctx.moveTo(cx + pointX * 10, cy + pointY * 10);
-        ctx.lineTo(cx - pointY * 6 - pointX * 4, cy + pointX * 6 - pointY * 4);
-        ctx.lineTo(cx + pointY * 6 - pointX * 4, cy - pointX * 6 - pointY * 4);
+        ctx.moveTo(cx, cy + 10);
+        ctx.lineTo(cx - 8, cy - 2);
+        ctx.lineTo(cx + 8, cy - 2);
         ctx.fill();
+        ctx.globalAlpha = 1;
       }
     });
   }
@@ -1682,7 +1603,7 @@
     ctx.font = '16px Segoe UI, system-ui, sans-serif';
     ctx.fillText('Flechas: mover  ·  Espacio: saltar  ·  J: atacar  ·  K o Shift: dash', W / 2, 300);
     ctx.fillText('E: guardado o grieta  ·  Q: gancho  ·  M: mapa grande  ·  R: nueva partida', W / 2, 330);
-    ctx.fillText('Objetivo: sigue las zonas en orden y vence al guardián de la última', W / 2, 360);
+    ctx.fillText('Objetivo: baja las seis filas y vence al guardián del final', W / 2, 360);
 
     if (Math.floor(Date.now() / 500) % 2 === 0) {
       ctx.fillStyle = '#ffc86a';
@@ -1722,7 +1643,7 @@
     const cxOf = (r) => x0 + r.gx * (cell + gap) + cell / 2;
     const cyOf = (r) => y0 + r.gy * (cell + gap) + cell / 2;
 
-    // Conexiones: puertas coloreadas por requisito y flechas en las de un sentido
+    // Conexiones: horizontales en cada fila y trampillas hacia abajo, con flecha
     world.edges.forEach((e) => {
       const A = world.rooms[e.a];
       const B = world.rooms[e.b];
@@ -1840,7 +1761,7 @@
     const explored = world.rooms.filter((r) => r.explored).length;
     ctx.fillText(`MAPA DEL REINO · ${BIOMES[biomeOfRoom(curRoom())]} · explorado ${explored}/${world.rooms.length} · M cierra`, W / 2, H - 48);
     ctx.font = '13px Segoe UI, system-ui, sans-serif';
-    ctx.fillText('Azul/morado: puerta de habilidad · Amarillo: llave · Naranja con flecha: puerta de un sentido', W / 2, H - 26);
+    ctx.fillText('Amarillo: llave · Naranja con flecha: trampilla que sólo baja · B: marcador', W / 2, H - 26);
     ctx.textAlign = 'left';
   }
 
@@ -1956,7 +1877,7 @@
     keys: () => keys,
     press: (k) => { pressed[k] = true; },
     isEnded: () => !!ended,
-    blockOf: blockOfRoom,
+    blockOf: (r) => r.block,
   };
   if (typeof document !== 'undefined' && document.getElementById('game')) init();
 })();
