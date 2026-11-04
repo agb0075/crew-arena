@@ -1883,6 +1883,12 @@
         if (e.key === 'Enter' || KEYMAP[e.key]) {
           started = true;
           e.preventDefault();
+          // La tecla que inicia la partida también cuenta como acción (por ejemplo, un salto)
+          const act = KEYMAP[e.key];
+          if (act) {
+            keys[act] = true;
+            pressed[act] = true;
+          }
         }
         return;
       }
