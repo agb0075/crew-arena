@@ -1,4 +1,4 @@
-// Metroidvania 2.5D: seis filas de salas recorridas en serpiente. Cada fila se baja por una trampilla
+﻿// Metroidvania 2.5D: seis filas de salas recorridas en serpiente. Cada fila se baja por una trampilla
 // del suelo, que puede tener una llave. Sin puertas en el techo, y siempre hay un orden de juego posible.
 (() => {
   'use strict';
@@ -1637,14 +1637,39 @@
     drawMinimap();
   }
 
-  // ---------- Mapa ----------
-  // Dibuja el mundo conocido. cell y gap controlan el tamaño; x0 y y0 la posición.
-  function drawWorldMap(m, cell, gap, x0, y0, showIcons) {
-    const cxOf = (r) => x0 + r.gx * (cell + gap) + cell / 2;
-    const cyOf = (r) => y0 + r.gy * (cell + gap) + cell / 2;
+  // ---------- Mapa libre ----------
+  // Cada sala es una forma irregular colocada con algo de azar, y los pasillos son curvas.
+  // Es sólo visual: la lógica del mundo sigue siendo la misma.
+  function makeLayout() {
+    const rooms = world.rooms.map((r) => {
+      const n = rnd(6, 8);
+      const shape = [];
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+        const rr = 0.7 + Math.random() * 0.3;
+        shape.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      }
+      return {
+        x: (r.gx + 0.5 + (Math.random() - 0.5) * 0.6) / GX,
+        y: (r.gy + 0.5 + (Math.random() - 0.5) * 0.6) / GY,
+        shape,
+      };
+    });
+    const bends = world.edges.map(() => (Math.random() - 0.5) * 0.4);
+    return { rooms, bends };
+  }
 
-    // Conexiones: horizontales en cada fila y trampillas hacia abajo, con flecha
-    world.edges.forEach((e) => {
+  // Dibuja el mundo conocido en forma libre. cell controla el tamaño; x0 y y0 la posición.
+  function drawFreeMap(m, cell, gap, x0, y0, showIcons) {
+    if (!world.layout) world.layout = makeLayout();
+    const L = world.layout;
+    const MW = GX * (cell + gap) - gap;
+    const MH = GY * (cell + gap) - gap;
+    const pos = (r) => ({ x: x0 + L.rooms[r.i].x * MW, y: y0 + L.rooms[r.i].y * MH });
+    const rad = cell * 0.5;
+
+    // Pasillos: curvas entre salas. Las trampillas de un sentido llevan flecha.
+    world.edges.forEach((e, ei) => {
       const A = world.rooms[e.a];
       const B = world.rooms[e.b];
       if (!A.explored && !B.explored) return;
@@ -1653,18 +1678,25 @@
         : e.need === 'secret' ? '#ffc86a'
           : e.need ? ABILITIES[e.need].color
             : e.src !== undefined ? '#ff9a6a' : '#5a5a72';
+      const p0 = pos(A);
+      const p2 = pos(B);
+      const dx = p2.x - p0.x;
+      const dy = p2.y - p0.y;
+      const c = { x: (p0.x + p2.x) / 2 - dy * L.bends[ei], y: (p0.y + p2.y) / 2 + dx * L.bends[ei] };
       m.strokeStyle = color;
       m.lineWidth = e.need || e.src !== undefined ? 3 : 2;
       m.beginPath();
-      m.moveTo(cxOf(A), cyOf(A));
-      m.lineTo(cxOf(B), cyOf(B));
+      m.moveTo(p0.x, p0.y);
+      m.quadraticCurveTo(c.x, c.y, p2.x, p2.y);
       m.stroke();
       if (e.src !== undefined && showIcons) {
         const from = world.rooms[e.src];
         const to = world.rooms[e.src === e.a ? e.b : e.a];
-        const mx = (cxOf(from) + cxOf(to)) / 2;
-        const my = (cyOf(from) + cyOf(to)) / 2;
-        const ang = Math.atan2(cyOf(to) - cyOf(from), cxOf(to) - cxOf(from));
+        const pf = pos(from);
+        const pt = pos(to);
+        const mx = 0.25 * p0.x + 0.5 * c.x + 0.25 * p2.x;
+        const my = 0.25 * p0.y + 0.5 * c.y + 0.25 * p2.y;
+        const ang = Math.atan2(pt.y - pf.y, pt.x - pf.x);
         m.fillStyle = color;
         m.beginPath();
         m.moveTo(mx + Math.cos(ang) * 6, my + Math.sin(ang) * 6);
@@ -1674,73 +1706,82 @@
       }
     });
 
+    // Salas: formas irregulares
     world.rooms.forEach((r) => {
-      const x = x0 + r.gx * (cell + gap);
-      const y = y0 + r.gy * (cell + gap);
+      const p = pos(r);
+      const shape = L.rooms[r.i].shape;
+      const path = () => {
+        m.beginPath();
+        shape.forEach(([sx, sy], k) => {
+          if (k === 0) m.moveTo(p.x + sx * rad, p.y + sy * rad);
+          else m.lineTo(p.x + sx * rad, p.y + sy * rad);
+        });
+        m.closePath();
+      };
+      const fontPx = Math.max(8, Math.round(rad * 0.8));
       if (!r.explored) {
+        path();
         m.fillStyle = '#14111c';
-        m.fillRect(x, y, cell, cell);
+        m.fill();
         m.strokeStyle = '#2e2a40';
         m.lineWidth = 1;
-        m.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
+        m.stroke();
         if (showIcons) {
           m.fillStyle = '#2a2638';
-          m.font = `${Math.round(cell * 0.4)}px Consolas, monospace`;
+          m.font = `${fontPx}px Consolas, monospace`;
           m.textAlign = 'center';
-          m.fillText('?', x + cell / 2, y + cell * 0.6);
+          m.fillText('?', p.x, p.y + fontPx * 0.35);
           m.textAlign = 'left';
         }
         return;
       }
       const accent = PALETTES[biomeOfRoom(r)].accent;
+      path();
       m.fillStyle = r.i === world.cur ? '#ffd23f' : r.cleared ? '#2b3a2b' : '#2a2a40';
-      m.fillRect(x, y, cell, cell);
+      m.fill();
       m.strokeStyle = accent;
       m.lineWidth = 1;
-      m.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
+      m.stroke();
 
       m.textAlign = 'center';
-      m.font = `bold ${Math.round(cell * 0.42)}px Consolas, monospace`;
+      m.font = `bold ${fontPx}px Consolas, monospace`;
+      const ty = p.y + fontPx * 0.35;
       if (r.boss) {
         m.fillStyle = world.bossDown ? '#7fd67f' : '#ff4d6d';
-        m.fillText(world.bossDown ? '★' : 'B', x + cell / 2, y + cell * 0.62);
+        m.fillText(world.bossDown ? '★' : 'B', p.x, ty);
       } else if (r.exit) {
         m.fillStyle = '#ffd23f';
-        m.fillText('>', x + cell / 2, y + cell * 0.62);
+        m.fillText('>', p.x, ty);
       } else if (r.pickup && showIcons) {
         const pk = r.pickup;
         m.fillStyle = pk.item === 'key' ? '#ffd23f' : ABILITIES[pk.item].color;
-        m.fillText(pk.item === 'key' ? 'K' : pk.item === 'dash' ? 'D' : pk.item === 'gancho' ? 'G' : 'S', x + cell / 2, y + cell * 0.62);
+        m.fillText(pk.item === 'key' ? 'K' : pk.item === 'dash' ? 'D' : pk.item === 'gancho' ? 'G' : 'S', p.x, ty);
       } else if (r.save && showIcons) {
         m.fillStyle = '#8fdcff';
-        m.fillText('+', x + cell / 2, y + cell * 0.62);
+        m.fillText('+', p.x, ty);
       }
       m.textAlign = 'left';
-
-      if (showIcons && r.i !== world.cur) {
-        m.fillStyle = accent;
-        m.globalAlpha = 0.25;
-        m.fillRect(x + 2, y + cell - 4, cell - 4, 2);
-        m.globalAlpha = 1;
-      }
     });
 
-    // Marcadores del jugador: punto azul en la esquina de la sala
+    // Marcadores del jugador: punto azul junto a la sala
     world.markers.forEach((i) => {
       const mr = world.rooms[i];
       if (!mr.explored) return;
+      const p = pos(mr);
       m.fillStyle = '#8fdcff';
       m.beginPath();
-      m.arc(x0 + mr.gx * (cell + gap) + cell - 6, y0 + mr.gy * (cell + gap) + 6, Math.max(2, cell * 0.1), 0, Math.PI * 2);
+      m.arc(p.x + rad * 0.6, p.y - rad * 0.6, Math.max(2, rad * 0.15), 0, Math.PI * 2);
       m.fill();
     });
 
     // Posición actual parpadeante
-    const cur = world.rooms[world.cur];
+    const cp = pos(world.rooms[world.cur]);
     if (Math.floor(frame / 15) % 2 === 0) {
       m.strokeStyle = '#ffffff';
       m.lineWidth = 2;
-      m.strokeRect(x0 + cur.gx * (cell + gap) - 1, y0 + cur.gy * (cell + gap) - 1, cell + 2, cell + 2);
+      m.beginPath();
+      m.arc(cp.x, cp.y, rad + 3, 0, Math.PI * 2);
+      m.stroke();
     }
   }
 
@@ -1753,7 +1794,7 @@
     const totalH = GY * (cell + gap) - gap;
     const x0 = Math.round((W - totalW) / 2);
     const y0 = Math.round((H - totalH) / 2 - 20);
-    drawWorldMap(ctx, cell, gap, x0, y0, true);
+    drawFreeMap(ctx, cell, gap, x0, y0, true);
 
     ctx.fillStyle = '#e8e2d4';
     ctx.font = 'bold 16px Consolas, "Courier New", monospace';
@@ -1771,7 +1812,7 @@
     m.clearRect(0, 0, 290, 196);
     m.fillStyle = '#08060c';
     m.fillRect(0, 0, 290, 196);
-    drawWorldMap(m, 26, 5, 5, 5, true);
+    drawFreeMap(m, 26, 5, 5, 5, true);
   }
 
   // ---------- Bucle de juego a 60 fps ----------
