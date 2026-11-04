@@ -606,6 +606,13 @@
     }
   }
 
+  // Pared a la izquierda (-1) o a la derecha (1) del personaje, 0 si no hay
+  function wallSide(p) {
+    if (overlapsTiles(p.x - 2, p.y + 6, 2, p.h - 12, [1])) return -1;
+    if (overlapsTiles(p.x + p.w, p.y + 6, 2, p.h - 12, [1])) return 1;
+    return 0;
+  }
+
   function burst(x, y, color, n = 10) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -621,6 +628,18 @@
     if (msgs.length > 4) msgs.shift();
   }
 
+  // Marcador en la sala actual: se ve en el mapa para volver a ella
+  function toggleMarker() {
+    const i = world.cur;
+    if (world.markers.has(i)) {
+      world.markers.delete(i);
+      notify('Marcador quitado de esta sala.', '#8fdcff');
+    } else {
+      world.markers.add(i);
+      notify('Marcador puesto en esta sala.', '#8fdcff');
+    }
+  }
+
   // Aviso grande centrado para hitos: zonas, guardianes, habilidades y el final
   function bigAlert(title, text, color = '#ffc86a') {
     big = { title, text, color, t: 260 };
@@ -629,6 +648,7 @@
   // ---------- Partida ----------
   function newGame() {
     world = genWorld();
+    world.markers = new Set();
     const start = groundSpots(world.rooms[0].tiles).reduce((best, p) =>
       (Math.abs(p.x - 8) < Math.abs(best.x - 8) ? p : best));
     player = {
@@ -637,7 +657,7 @@
       coyote: 0, jumpBuf: 0, jumpsLeft: 0,
       hp: 6, maxHp: 6, iframes: 0, dashT: 0, dashCD: 0, atkT: 0, hits: new Set(),
       abil: { dash: true, djump: true, gancho: true }, keys: 0,
-      hookT: 0, hookCD: 0, hookTarget: null,
+      hookT: 0, hookCD: 0, hookTarget: null, wallCD: 0,
       respawn: { room: 0, x: start.x * TS + 6, y: (start.y + 1) * TS - 28 },
       dead: false, respawnT: 0,
     };
@@ -846,6 +866,11 @@
       p.vy = Math.min(p.vy + GRAV, MAX_FALL);
     }
 
+    // Deslizarse por una pared al caer, si mantienes la dirección hacia ella
+    if (!p.onGround && p.vy > 0 && p.dashT <= 0 && p.hookT <= 0 && (keys.left || keys.right) && wallSide(p) !== 0) {
+      p.vy = Math.min(p.vy, 2.5);
+    }
+
     // Salto con margen de caída y memoria de la pulsación
     if (p.onGround) {
       p.coyote = COYOTE;
@@ -864,6 +889,20 @@
         p.jumpsLeft--;
         p.jumpBuf = 0;
         burst(p.x + p.w / 2, p.y + p.h, '#b07cff', 10);
+      }
+    }
+    // Salto de pared: en el aire, pegado a una pared, saltas en sentido contrario
+    if (p.wallCD > 0) p.wallCD--;
+    if (p.jumpBuf > 0 && !p.onGround && p.wallCD <= 0) {
+      const side = wallSide(p);
+      if (side !== 0) {
+        p.vx = -side * 7;
+        p.vy = JUMP_V * 0.9;
+        p.face = -side;
+        p.jumpBuf = 0;
+        p.wallCD = 12;
+        p.jumpsLeft = held('djump') ? 1 : 0;
+        burst(p.x + (side < 0 ? 0 : p.w), p.y + p.h / 2, '#ffffff', 8);
       }
     }
     if (!keys.jump && p.vy < JUMP_CUT && p.dashT <= 0 && p.hookT <= 0) p.vy = JUMP_CUT;
@@ -1772,6 +1811,16 @@
       }
     });
 
+    // Marcadores del jugador: punto azul en la esquina de la sala
+    world.markers.forEach((i) => {
+      const mr = world.rooms[i];
+      if (!mr.explored) return;
+      m.fillStyle = '#8fdcff';
+      m.beginPath();
+      m.arc(x0 + mr.gx * (cell + gap) + cell - 6, y0 + mr.gy * (cell + gap) + 6, Math.max(2, cell * 0.1), 0, Math.PI * 2);
+      m.fill();
+    });
+
     // Posición actual parpadeante
     const cur = world.rooms[world.cur];
     if (Math.floor(frame / 15) % 2 === 0) {
@@ -1795,7 +1844,8 @@
     ctx.fillStyle = '#e8e2d4';
     ctx.font = 'bold 16px Consolas, "Courier New", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('MAPA DEL REINO · pulsa M para cerrar', W / 2, H - 48);
+    const explored = world.rooms.filter((r) => r.explored).length;
+    ctx.fillText(`MAPA DEL REINO · ${BIOMES[biomeOfRoom(curRoom())]} · explorado ${explored}/${world.rooms.length} · M cierra`, W / 2, H - 48);
     ctx.font = '13px Segoe UI, system-ui, sans-serif';
     ctx.fillText('Azul/morado: puerta de habilidad · Amarillo: llave · Naranja con flecha: puerta de un sentido', W / 2, H - 26);
     ctx.textAlign = 'left';
@@ -1834,6 +1884,11 @@
           started = true;
           e.preventDefault();
         }
+        return;
+      }
+      if (e.key === 'b' || e.key === 'B') {
+        toggleMarker();
+        e.preventDefault();
         return;
       }
       if (e.key === 'm' || e.key === 'M') {
