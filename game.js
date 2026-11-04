@@ -29,7 +29,7 @@
   const RESPAWN_FRAMES = 100;
   const HOOK_FRAMES = 40;
   const HOOK_RANGE = 240;
-  const GAP_Y = [7, 8, 9, 10];      // filas de las salidas laterales
+  const GAP_Y = [13, 14, 15, 16];      // filas de las salidas laterales
   const GAP_X = [13, 14, 15, 16];   // columnas de las salidas superior e inferior
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   // Bloques de 3x3 salas en serpiente: el orden es el orden de juego
@@ -283,7 +283,7 @@
 
   // Elige un diseño de sala que el jugador pueda recorrer entero. Si ninguno sirve, sala lisa.
   function genRoomTiles(room) {
-    for (const p of shuffle(['platforms', 'stairs', 'pillars', 'pit', 'shaft', 'ledges', 'islands', 'climb', 'bridge', 'checker'])) {
+    for (const p of shuffle(['stairs', 'pit', 'shaft', 'ledges', 'islands', 'climb', 'bridge', 'checker'])) {
       const t = makeRoomTiles(room, p);
       if (roomReachable(t, room.conn)) return t;
     }
@@ -369,20 +369,12 @@
       for (let x = x0 - 1; x < x0 + len + 1; x++) put(x, y, v);
     };
     const pattern = forcedPattern;
-    if (pattern === 'platforms') {
-      [14, 11, 8, 5].forEach((ly) => {
-        if (Math.random() < 0.6) row(ly, rnd(4, RW - 9), rnd(3, 6), 2);
-      });
-    } else if (pattern === 'stairs') {
+    if (pattern === 'stairs') {
       const mirror = Math.random() < 0.5;
       for (let s = 0; s < 5; s++) {
         const x0 = mirror ? RW - 6 - s * 3 - 4 : 5 + s * 3;
         row(15 - s * 2, x0, 4, 2);
       }
-    } else if (pattern === 'pillars') {
-      [6, 9, 21, 24].forEach((x) => {
-        if (Math.random() < 0.6) for (let y = 8; y < RH - 1; y++) put(x, y, 1);
-      });
     } else if (pattern === 'pit') {
       row(RH - 2, 12, 4, 3);
       row(13, 9, 4, 2);
@@ -422,13 +414,6 @@
       row(10, 24, 3, 2);
     }
 
-    // Pinchos en el suelo, salvo en la entrada y en la sala del guardián
-    if (room.i !== 0 && !room.boss && Math.random() < 0.3) {
-      const x0 = rnd(3, RW - 6);
-      for (let x = x0; x < x0 + 2; x++) {
-        if (t[RH - 2][x] === 0) t[RH - 2][x] = 3;
-      }
-    }
     return t;
   }
 
