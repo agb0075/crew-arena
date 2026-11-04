@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pixel Quest · Metroidvania 2.5D</title>
+  <style>
+    :root {
+      --bg: #050308;
+      --panel: #120f1a;
+      --border: #2a2438;
+      --text: #e8e2d4;
+      --dim: #9a93a8;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+    h1 { margin: 0; font-family: Consolas, "Courier New", monospace; letter-spacing: 6px; font-size: 22px; color: #ffc86a; }
+    .stage { position: relative; width: min(960px, 100%); aspect-ratio: 960 / 576; border: 2px solid var(--border); border-radius: 6px; overflow: hidden; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); }
+    canvas#game { display: block; width: 100%; height: 100%; image-rendering: pixelated; background: #000; }
+    .side { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; width: min(960px, 100%); }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+    .panel h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); }
+    .panel p { margin: 4px 0; font-size: 14px; }
+    kbd { font-family: Consolas, monospace; background: #241f32; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+    canvas#mini { display: block; width: 240px; height: auto; image-rendering: pixelated; background: #08060c; border-radius: 4px; }
+    button { font-family: inherit; font-weight: 600; font-size: 14px; color: var(--text); background: #2a2438; border: 1px solid #4a4266; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+    button:hover { border-color: #ffc86a; }
+    button:focus-visible { outline: 2px solid #ffc86a; outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <h1>PIXEL QUEST</h1>
+  <div class="stage">
+    <canvas id="game" width="960" height="576" tabindex="0" aria-label="Escena del juego"></canvas>
+  </div>
+  <div class="side">
+    <section class="panel">
+      <h2>Controles</h2>
+      <p><kbd>←</kbd> <kbd>→</kbd> mover · <kbd>Espacio</kbd> saltar</p>
+      <p><kbd>J</kbd> atacar · <kbd>K</kbd> o <kbd>Shift</kbd> dash</p>
+      <p><kbd>E</kbd> usar punto de guardado</p>
+      <p>Llega a la escalera del guardián para acabar el juego</p>
+    </section>
+    <section class="panel">
+      <h2>Mapa</h2>
+      <canvas id="mini" width="240" height="160" aria-label="Mapa del reino"></canvas>
+      <p><kbd>M</kbd> mapa grande</p>
+    </section>
+    <section class="panel">
+      <h2>Partida</h2>
+      <button type="button" id="restart">Nueva partida</button>
+    </section>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
