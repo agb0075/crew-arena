@@ -16,7 +16,7 @@
   const MAX_FALL = 12;
   const RUN_ACC = 0.6;
   const RUN_MAX = 4.6;
-  const JUMP_V = -10.5;
+  const JUMP_V = -11.5;
   const DJUMP_V = -9.5;
   const JUMP_CUT = -3;              // altura mínima del salto si sueltas el botón pronto
   const DASH_V = 11;
@@ -35,7 +35,8 @@
   // Bloques de 3x3 salas en serpiente: el orden es el orden de juego
   const BLOCK_ORDER = [[0, 0], [1, 0], [2, 0], [2, 1], [1, 1], [0, 1]];
   // Objeto que abre la puerta entre el bloque b y el b+1. Cada uno está en el bloque b.
-  const GATES = ['dash', 'key', 'djump', 'key', 'gancho'];
+  // Las habilidades se tienen desde el inicio, así que sólo las fronteras con llave tienen puerta cerrada.
+  const GATES = [null, 'key', null, 'key', null];
   const ABILITIES = {
     dash: { name: 'Dash', color: '#7fd6ff', hint: 'K o Shift: impulso horizontal.' },
     djump: { name: 'Doble salto', color: '#b07cff', hint: 'Espacio otra vez en el aire.' },
@@ -204,6 +205,11 @@
       }));
       const [a, c] = pick(pairs);
       crossings.push(addEdge(a, c, GATES[b]));
+      // Frontera sin llave: un segundo pasillo abierto para que las zonas estén más conectadas
+      if (!GATES[b] && pairs.length > 1) {
+        const [a2, c2] = pick(pairs.filter(([x, y]) => x !== a || y !== c));
+        addEdge(a2, c2, null);
+      }
     }
 
     // Objetos: cada uno en un sitio cualquiera de su bloque (todo el bloque es alcanzable desde su entrada)
@@ -212,7 +218,7 @@
       // El objeto del bloque b va en su sala de entrada: todo el bloque se alcanza sólo por ahí,
       // así que se recoge antes de llegar a cualquier puerta del bloque
       const entryRoom = b === 0 ? 0 : crossings[b - 1].b;
-      placed.push({ room: entryRoom, item: GATES[b] });
+      if (GATES[b]) placed.push({ room: entryRoom, item: GATES[b] });
     }
 
     // Guardián: la sala más lejos de la entrada del último bloque
@@ -358,8 +364,9 @@
     const put = (x, y, v) => {
       if (x > 0 && x < RW - 1 && y > 0 && y < RH - 1 && t[y][x] === 0 && !inGap(x, y)) t[y][x] = v;
     };
+    // Plataformas un poco más anchas que su definición: se salta mejor
     const row = (y, x0, len, v) => {
-      for (let x = x0; x < x0 + len; x++) put(x, y, v);
+      for (let x = x0 - 1; x < x0 + len + 1; x++) put(x, y, v);
     };
     const pattern = forcedPattern;
     if (pattern === 'platforms') {
@@ -629,7 +636,7 @@
       vx: 0, vy: 0, face: 1, onGround: false, prevBottom: 0,
       coyote: 0, jumpBuf: 0, jumpsLeft: 0,
       hp: 6, maxHp: 6, iframes: 0, dashT: 0, dashCD: 0, atkT: 0, hits: new Set(),
-      abil: { dash: false, djump: false, gancho: false }, keys: 0,
+      abil: { dash: true, djump: true, gancho: true }, keys: 0,
       hookT: 0, hookCD: 0, hookTarget: null,
       respawn: { room: 0, x: start.x * TS + 6, y: (start.y + 1) * TS - 28 },
       dead: false, respawnT: 0,
@@ -640,7 +647,7 @@
     mapOpen = false;
     ended = null;
     onEnterRoom(curRoom());
-    bigAlert('AVENTURA', 'Seis zonas en orden. Cada una te da el objeto que abre la siguiente.');
+    bigAlert('AVENTURA', 'Tienes todas tus habilidades. Consigue las llaves y vence al guardián.');
   }
 
   // Novedades al entrar en una sala: zona nueva, santuario, centinela y guardián
