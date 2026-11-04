@@ -1249,6 +1249,17 @@
         if (v === 1) {
           ctx.fillStyle = pal.wall;
           ctx.fillRect(x, y, TS, TS);
+          if (ty === 0) {
+            // Techo visible: franja más clara con estalactitas, sin aberturas hacia arriba
+            ctx.fillStyle = pal.wallHi;
+            ctx.fillRect(x, y, TS, 8);
+            ctx.fillStyle = pal.wallLo;
+            ctx.beginPath();
+            ctx.moveTo(x + (tx % 2) * 6, y + 8);
+            ctx.lineTo(x + (tx % 2) * 6 + 10, y + 8);
+            ctx.lineTo(x + (tx % 2) * 6 + 5, y + 16);
+            ctx.fill();
+          }
           if (ty > 0 && r.tiles[ty - 1][tx] === 0) {
             ctx.fillStyle = pal.wallHi;
             ctx.fillRect(x, y, TS, 4);
