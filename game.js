@@ -346,6 +346,16 @@
       row(14, 20, 3, 2);
       row(10, 24, 3, 2);
     }
+    // Muro con paso: obliga a dar la vuelta o a pasar por la abertura de arriba o de abajo
+    if (!room.boss && room.i !== 0 && Math.random() < 0.5) {
+      const bx = rnd(11, 18);
+      const gy0 = Math.random() < 0.5 ? 2 : 12;
+      for (let y = 2; y < RH - 1; y++) {
+        if (y >= gy0 && y < gy0 + 4) continue;
+        put(bx, y, 1);
+        put(bx + 1, y, 1);
+      }
+    }
     return t;
   }
 
@@ -421,10 +431,40 @@
           });
         }
       }
+      if (room.block >= 1 && inner.length) addSpecial(room, inner);
       if (inner.length && Math.random() < 0.15) {
         const s = pick(inner);
         room.save = { x: s.x * TS + 2, y: (s.y + 1) * TS - 28, w: 28, h: 28 };
       }
+    }
+  }
+
+  // Enemigos especiales: torreta que dispara, escudo que sólo se ataca por la espalda y lanzador que se tira en picado
+  function addSpecial(room, inner) {
+    const kinds = room.block >= 2 ? ['shooter', 'diver', 'shield'] : ['shooter', 'diver'];
+    const n = rnd(1, 2);
+    for (let i = 0; i < n; i++) {
+      const type = pick(kinds);
+      if (type === 'diver') {
+        const y = rnd(3, 9);
+        const x = rnd(3, RW - 4);
+        room.enemies.push({
+          type: 'diver', x: x * TS, y: y * TS, base: y * TS, w: 22, h: 18, vx: 0, vy: 0,
+          hp: 2, dmg: 1, hurt: 0, dead: false, state: 'hover', t: rnd(0, 60), cool: 0, dt: 0,
+          hitWall: false, bounded: true,
+        });
+        continue;
+      }
+      const s = pick(inner);
+      const shield = type === 'shield';
+      const e = {
+        type, x: s.x * TS + 3, y: (s.y + 1) * TS - (shield ? 30 : 26), w: shield ? 28 : 24, h: shield ? 30 : 26,
+        vx: 0, vy: 0, hp: shield ? 3 : 2, dmg: 1, hurt: 0, dead: false, face: Math.random() < 0.5 ? 1 : -1,
+        hitWall: false, onGround: false, bounded: true,
+      };
+      if (type === 'shooter') e.cd = rnd(60, 120);
+      if (shield) e.guard = e.face;
+      room.enemies.push(e);
     }
   }
 
@@ -699,6 +739,61 @@
         e.y = e.base + Math.sin(e.t * 0.05) * 36;
       } else if (e.type === 'boss') {
         updateBoss(e);
+      } else if (e.type === 'shield') {
+        // El escudo camina y de vez en cuando se gira hacia el jugador
+        e.guardT = (e.guardT || 0) + 1;
+        if (e.guardT % 150 === 0) e.guard = player.x < e.x ? -1 : 1;
+        e.vx = e.face * 0.7;
+        e.vy = Math.min(e.vy + GRAV, MAX_FALL);
+        moveX(e);
+        if (e.hitWall) e.face *= -1;
+        const ahead = Math.floor((e.face > 0 ? e.x + e.w + 2 : e.x - 2) / TS);
+        const floor = tileAt(ahead, Math.floor((e.y + e.h + 4) / TS));
+        if (floor !== 1 && floor !== 2) e.face *= -1;
+        moveY(e);
+      } else if (e.type === 'shooter') {
+        // La torreta dispara un proyectil hacia el jugador cuando está a la vista
+        e.vy = Math.min(e.vy + GRAV, MAX_FALL);
+        moveY(e);
+        e.cd = (e.cd || 90) - 1;
+        if (e.cd <= 0 && Math.abs(player.x - e.x) < 620) {
+          e.cd = 110;
+          const dir = player.x < e.x ? -1 : 1;
+          r.enemies.push({
+            type: 'shot', x: dir > 0 ? e.x + e.w : e.x - 10, y: e.y + 8, w: 10, h: 10, vx: dir * 3.4, vy: 0,
+            hp: 1, dmg: 1, hurt: 0, dead: false, life: 200, hitWall: false,
+          });
+        }
+      } else if (e.type === 'diver') {
+        // El lanzador flota, se tira en picado hacia el jugador y vuelve a su sitio
+        e.t++;
+        if (e.state === 'dive') {
+          e.dt--;
+          e.x += e.vx;
+          e.y += e.vy;
+          if (e.dt <= 0 || overlapsTiles(e.x, e.y, e.w, e.h, [1])) {
+            e.state = 'rest';
+            e.cool = 110;
+            e.vx = 0;
+            e.vy = 0;
+          }
+        } else {
+          e.cool--;
+          e.y += (e.base + Math.sin(e.t * 0.05) * 14 - e.y) * 0.08;
+          const dist = Math.hypot(player.x - e.x, player.y - e.y);
+          if (e.cool <= 0 && dist < 260) {
+            const a = Math.atan2(player.y + player.h / 2 - (e.y + e.h / 2), player.x + player.w / 2 - (e.x + e.w / 2));
+            e.state = 'dive';
+            e.dt = 70;
+            e.vx = Math.cos(a) * 5.5;
+            e.vy = Math.sin(a) * 5.5;
+          }
+        }
+      } else if (e.type === 'shot') {
+        // Proyectil: vuela recto y desaparece al chocar o al salir de la sala
+        e.life--;
+        e.x += e.vx;
+        if (e.life <= 0 || e.x < -10 || e.x > W || overlapsTiles(e.x, e.y, e.w, e.h, [1])) e.dead = true;
       }
 
       if (e.y > H + 40) {
@@ -858,6 +953,12 @@
         const hb = { x: p.face > 0 ? p.x + p.w : p.x - 34, y: p.y + 4, w: 34, h: p.h - 8 };
         curRoom().enemies.forEach((e) => {
           if (e.dead || p.hits.has(e) || !overlaps(hb, e)) return;
+          // El escudo bloquea los golpes que vienen del lado al que mira
+          if (e.type === 'shield' && Math.sign(p.x - e.x) === e.guard) {
+            p.hits.add(e);
+            notify('El escudo bloquea el golpe. Ataca por la espalda.', '#c0c8d8');
+            return;
+          }
           e.hp--;
           e.hurt = 10;
           p.hits.add(e);
@@ -1393,12 +1494,71 @@
     }
   }
 
+  function drawShooter(e) {
+    shadow(e, 0.7);
+    ctx.fillStyle = e.hurt > 0 ? '#ffffff' : '#5a6070';
+    ctx.fillRect(e.x + 2, e.y + 8, e.w - 4, e.h - 8);
+    const dir = player.x < e.x ? -1 : 1;
+    ctx.fillStyle = '#3a3f4c';
+    ctx.fillRect(dir > 0 ? e.x + e.w - 2 : e.x - 8, e.y + 12, 10, 5);
+    ctx.fillStyle = '#ff7a3a';
+    ctx.fillRect(e.x + e.w / 2 - 2, e.y + 2, 4, 4);
+  }
+
+  function drawShield(e) {
+    shadow(e, 0.8);
+    ctx.fillStyle = e.hurt > 0 ? '#ffffff' : '#6b5a4a';
+    ctx.fillRect(e.x + 4, e.y + 6, e.w - 8, e.h - 6);
+    ctx.fillStyle = '#c0c8d8';
+    const sx = e.guard > 0 ? e.x + e.w - 4 : e.x - 2;
+    ctx.fillRect(sx, e.y, 6, e.h);
+    ctx.fillStyle = '#101010';
+    ctx.fillRect(e.x + e.w / 2 - 3, e.y + 9, 2, 3);
+  }
+
+  function drawDiver(e) {
+    ctx.fillStyle = e.hurt > 0 ? '#ffffff' : e.state === 'dive' ? '#ff4d3d' : '#8a3a6a';
+    ctx.beginPath();
+    ctx.ellipse(e.x + e.w / 2, e.y + e.h / 2, e.w / 2, e.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const wing = Math.sin(frame * 0.5) * 5;
+    ctx.fillStyle = '#4a1f3a';
+    ctx.beginPath();
+    ctx.moveTo(e.x, e.y + e.h / 2);
+    ctx.lineTo(e.x - 8, e.y - wing + 2);
+    ctx.lineTo(e.x + 4, e.y + e.h);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(e.x + e.w, e.y + e.h / 2);
+    ctx.lineTo(e.x + e.w + 8, e.y - wing + 2);
+    ctx.lineTo(e.x + e.w - 4, e.y + e.h);
+    ctx.fill();
+    ctx.fillStyle = '#ffe27a';
+    ctx.fillRect(e.x + e.w / 2 - 4, e.y + 5, 3, 3);
+    ctx.fillRect(e.x + e.w / 2 + 2, e.y + 5, 3, 3);
+  }
+
+  function drawShot(e) {
+    ctx.fillStyle = 'rgba(255,120,60,0.35)';
+    ctx.beginPath();
+    ctx.arc(e.x + 5, e.y + 5, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffb36a';
+    ctx.beginPath();
+    ctx.arc(e.x + 5, e.y + 5, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function drawEnemies(r) {
     r.enemies.forEach((e) => {
       if (e.dead) return;
       if (e.type === 'crawler') drawCrawler(e);
       else if (e.type === 'bat') drawBat(e);
       else if (e.type === 'boss') drawBoss(e);
+      else if (e.type === 'shooter') drawShooter(e);
+      else if (e.type === 'shield') drawShield(e);
+      else if (e.type === 'diver') drawDiver(e);
+      else if (e.type === 'shot') drawShot(e);
     });
     const boss = r.enemies.find((e) => e.type === 'boss' && !e.dead);
     if (boss) {
